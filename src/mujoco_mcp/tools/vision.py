@@ -1,9 +1,11 @@
 """Phase 4g: Vision API tool — analyze_scene via Gemini 2.5 Pro."""
 
+import asyncio
 import json
 import os
 from io import BytesIO
 
+import mujoco
 from PIL import Image
 from mcp.server.fastmcp import Context
 
@@ -46,7 +48,11 @@ def _call_gemini(
             temperature=0.1,
         ),
     )
-    return response.text
+    text = response.text
+    if text is None:
+        finish = getattr(response, "finish_reason", "unknown")
+        raise ValueError(f"Gemini returned no text (finish_reason={finish})")
+    return text
 
 
 @mcp.tool()
@@ -92,13 +98,12 @@ async def analyze_scene(
     slot = mgr.get(sim_name)
     m, d = slot.model, slot.data
 
-    import mujoco as _mj
     body_names = [
-        _mj.mj_id2name(m, _mj.mjtObj.mjOBJ_BODY, i) or f"<body:{i}>"
+        mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, i) or f"<body:{i}>"
         for i in range(m.nbody)
     ]
     joint_names = [
-        _mj.mj_id2name(m, _mj.mjtObj.mjOBJ_JOINT, i) or f"<joint:{i}>"
+        mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, i) or f"<joint:{i}>"
         for i in range(m.njnt)
     ]
     qpos_str = ", ".join(f"{v:.3f}" for v in d.qpos)
@@ -115,27 +120,31 @@ async def analyze_scene(
 
     png_bytes = None
     image_sent = False
-    try:
-        renderer = mgr.require_renderer(slot)
-        cam_id = resolve_camera(m, camera)
-        update_scene(renderer, d, camera_id=cam_id)
-        pixels = renderer.render()
-        img = Image.fromarray(pixels).resize((width, height), Image.LANCZOS)
-        buf = BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        png_bytes = buf.getvalue()
-        image_sent = True
-    except RuntimeError:
+    if slot.renderer is not None:
+        try:
+            renderer = mgr.require_renderer(slot)
+            cam_id = resolve_camera(m, camera)
+            update_scene(renderer, d, camera_id=cam_id)
+            pixels = renderer.render()
+            img = Image.fromarray(pixels).resize((width, height), Image.LANCZOS)
+            buf = BytesIO()
+            img.save(buf, format="PNG", optimize=True)
+            png_bytes = buf.getvalue()
+            image_sent = True
+        except Exception as e:
+            system_prompt += f"\n\n(Image capture failed: {e} — answering from metadata only.)"
+    else:
         system_prompt += "\n\n(No image available — answer based on metadata only.)"
 
     try:
-        analysis = _call_gemini(
+        loop = asyncio.get_event_loop()
+        analysis = await loop.run_in_executor(None, lambda: _call_gemini(
             api_key=api_key,
             model=model,
             system_prompt=system_prompt,
             user_prompt=prompt,
             png_bytes=png_bytes,
-        )
+        ))
     except Exception as e:
         return json.dumps({"error": f"{type(e).__name__}: {e}"})
 
