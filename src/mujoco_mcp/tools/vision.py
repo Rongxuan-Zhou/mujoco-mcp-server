@@ -762,10 +762,8 @@ async def render_figure_strip(
 
         qpos = frame["qpos"]
         qvel = frame["qvel"]
-        if len(qpos) == m.nq:
-            d.qpos[:] = qpos
-        if len(qvel) == m.nv:
-            d.qvel[:] = qvel
+        d.qpos[:] = qpos
+        d.qvel[:] = qvel
         d.time = actual_t
         mujoco.mj_forward(m, d)
 
@@ -790,10 +788,8 @@ async def render_figure_strip(
     summary = TextContent(
         type="text",
         text=json.dumps({
-            "timestamps_requested": timestamps,
             "timestamps_rendered": timestamps_rendered,
             "nearest_frames": nearest_frames,
-            "images_rendered": len(images),
         }, ensure_ascii=False),
     )
 

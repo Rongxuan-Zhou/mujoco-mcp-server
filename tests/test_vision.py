@@ -446,13 +446,17 @@ def test_render_figure_strip_no_trajectory():
 
 
 def test_render_figure_strip_restores_state():
-    """After rendering, qpos must be restored to its original value."""
+    """After rendering, qpos/qvel/time must be restored to original values."""
     import asyncio
     import numpy as np
     ctx, slot = _make_ctx_with_trajectory()
     original_qpos = slot.data.qpos.copy()
+    original_qvel = slot.data.qvel.copy()
+    original_time = float(slot.data.time)
 
     from mujoco_mcp.tools.vision import render_figure_strip
     asyncio.run(render_figure_strip(ctx, timestamps=[0.02, 0.07]))
 
     np.testing.assert_array_almost_equal(slot.data.qpos, original_qpos)
+    np.testing.assert_array_almost_equal(slot.data.qvel, original_qvel)
+    assert abs(slot.data.time - original_time) < 1e-9
