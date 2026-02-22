@@ -546,18 +546,19 @@ class MuJoCoRLEnvironment(gym.Env):
         super().reset(seed=seed)
 
         # Connect to viewer if needed
-        if not self.viewer_client.connected:
-            success = self.viewer_client.connect()
-            if not success:
-                raise RuntimeError("Failed to connect to MuJoCo viewer server")
+        if self.viewer_client is not None:
+            if not self.viewer_client.connected:
+                success = self.viewer_client.connect()
+                if not success:
+                    raise RuntimeError("Failed to connect to MuJoCo viewer server")
 
-        # Load model
-        response = self.viewer_client.send_command(
-            {"type": "load_model", "model_id": self.model_id, "model_xml": self.model_xml}
-        )
+            # Load model
+            response = self.viewer_client.send_command(
+                {"type": "load_model", "model_id": self.model_id, "model_xml": self.model_xml}
+            )
 
-        if not response.get("success"):
-            raise RuntimeError(f"Failed to load model: {response.get('error')}")
+            if not response.get("success"):
+                raise RuntimeError(f"Failed to load model: {response.get('error')}")
 
         # Reset episode state
         self.current_step = 0
@@ -660,13 +661,14 @@ class MuJoCoRLEnvironment(gym.Env):
         scaled_action = action * 10.0  # Scale to reasonable torque range
 
         # Send command to MuJoCo
-        self.viewer_client.send_command(
-            {
-                "type": "set_joint_positions",
-                "model_id": self.model_id,
-                "positions": scaled_action.tolist(),
-            }
-        )
+        if self.viewer_client is not None:
+            self.viewer_client.send_command(
+                {
+                    "type": "set_joint_positions",
+                    "model_id": self.model_id,
+                    "positions": scaled_action.tolist(),
+                }
+            )
 
     def _get_observation(self) -> np.ndarray:
         """Get current observation from simulation.
@@ -677,6 +679,8 @@ class MuJoCoRLEnvironment(gym.Env):
         Raises:
             RuntimeError: If state cannot be retrieved from simulation.
         """
+        if self.viewer_client is None:
+            return np.zeros(self.observation_space.shape, dtype=np.float32)
         response = self.viewer_client.send_command({"type": "get_state", "model_id": self.model_id})
 
         if response.get("success"):
@@ -745,7 +749,7 @@ class MuJoCoRLEnvironment(gym.Env):
             - Should be called when the environment is no longer needed
             - Safe to call multiple times (idempotent)
         """
-        if self.viewer_client.connected:
+        if self.viewer_client is not None and self.viewer_client.connected:
             self.viewer_client.send_command({"type": "close_model", "model_id": self.model_id})
             self.viewer_client.disconnect()
 
