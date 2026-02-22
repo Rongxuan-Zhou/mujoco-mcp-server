@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 from io import BytesIO
 
@@ -12,6 +13,8 @@ from mcp.server.fastmcp import Context
 from .._registry import mcp
 from ..compat import resolve_camera, update_scene
 from . import safe_tool
+
+logger = logging.getLogger(__name__)
 
 try:
     from google import genai
@@ -120,21 +123,25 @@ async def analyze_scene(
 
     png_bytes = None
     image_sent = False
-    if slot.renderer is not None:
-        try:
-            renderer = mgr.require_renderer(slot)
-            cam_id = resolve_camera(m, camera)
-            update_scene(renderer, d, camera_id=cam_id)
-            pixels = renderer.render()
-            img = Image.fromarray(pixels).resize((width, height), Image.LANCZOS)
-            buf = BytesIO()
-            img.save(buf, format="PNG", optimize=True)
-            png_bytes = buf.getvalue()
-            image_sent = True
-        except Exception as e:
-            system_prompt += f"\n\n(Image capture failed: {e} — answering from metadata only.)"
-    else:
+    try:
+        renderer = mgr.require_renderer(slot)  # raises RuntimeError when no GL renderer available
+        cam_id = resolve_camera(m, camera)
+        update_scene(renderer, d, camera_id=cam_id)
+        pixels = renderer.render()
+        img = Image.fromarray(pixels)
+        if img.width != width or img.height != height:  # only resize when dimensions differ (fix I-2)
+            img = img.resize((width, height), Image.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        png_bytes = buf.getvalue()
+        image_sent = True
+    except RuntimeError:
+        # require_renderer raises RuntimeError when no GL renderer available
         system_prompt += "\n\n(No image available — answer based on metadata only.)"
+    except Exception as e:
+        # Renderer present but image capture failed
+        system_prompt += f"\n\n(Image capture failed: {e} — answering from metadata only.)"
+        logger.warning(f"Vision tool: image capture failed: {e}")
 
     try:
         loop = asyncio.get_running_loop()

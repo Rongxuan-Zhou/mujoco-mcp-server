@@ -43,5 +43,7 @@ mcp = FastMCP(
     dependencies=[
         "mujoco>=2.3.0", "numpy", "Pillow",
         "pandas", "matplotlib", "packaging",
+        # google-genai is optional (vision feature only).
+        # Install with: pip install 'mujoco-mcp-server[vision]'
     ],
 )
