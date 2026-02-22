@@ -153,6 +153,7 @@ def _call_gemini(
     system_prompt: str,
     user_prompt: str,
     png_bytes: bytes | None,
+    mime_type: str = "image/png",
 ) -> str:
     """Send image + prompt to Gemini. Returns response text."""
     client = _get_client(api_key)
@@ -161,9 +162,94 @@ def _call_gemini(
     if png_bytes:
         parts.append(
             genai_types.Part(
-                inline_data=genai_types.Blob(data=png_bytes, mime_type="image/png")
+                inline_data=genai_types.Blob(data=png_bytes, mime_type=mime_type)
             )
         )
+    parts.append(genai_types.Part(text=user_prompt))
+
+    response = _call_with_retry(lambda: client.models.generate_content(
+        model=model,
+        contents=[genai_types.Content(role="user", parts=parts)],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.1,
+        ),
+    ))
+    text = response.text
+    if text is None:
+        finish = getattr(response, "finish_reason", "unknown")
+        raise ValueError(f"Gemini returned no text (finish_reason={finish})")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Private helpers shared by analyze_scene, compare_scenes, track_object
+# ---------------------------------------------------------------------------
+
+def _render_slot_image(
+    mgr,
+    slot,
+    camera: str | None,
+    width: int,
+    height: int,
+) -> "tuple[bytes, str] | None":
+    """Render *slot* to image bytes. Returns (bytes, mime_type) or None on failure.
+
+    Uses JPEG for large images (width*height > 262144) to reduce token usage,
+    PNG otherwise. JPEG quality controlled by MUJOCO_MCP_VISION_JPEG_QUALITY env var (default 85).
+    """
+    try:
+        renderer = mgr.require_renderer(slot)
+        cam_id = resolve_camera(slot.model, camera)
+        update_scene(renderer, slot.data, camera_id=cam_id)
+        pixels = renderer.render()
+        img = Image.fromarray(pixels)
+        if img.width != width or img.height != height:
+            img = img.resize((width, height), Image.LANCZOS)
+        buf = BytesIO()
+        use_jpeg = (width * height) > 262144
+        if use_jpeg:
+            quality = int(os.environ.get("MUJOCO_MCP_VISION_JPEG_QUALITY", "85"))
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            mime_type = "image/jpeg"
+        else:
+            img.save(buf, format="PNG", optimize=True)
+            mime_type = "image/png"
+        return buf.getvalue(), mime_type
+    except Exception as e:
+        logger.warning("_render_slot_image failed for slot %r: %s", getattr(slot, "name", "?"), e)
+        return None
+
+
+def _call_gemini_multi_image(
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    images: "list[tuple[bytes, str] | None]",
+) -> str:
+    """Send multiple images + prompt to Gemini.  Returns response text.
+
+    Each image is preceded by a text label ("Image 1:", "Image 2:", ...).
+    None entries are silently skipped (the label is still omitted).
+    Each entry is a (bytes, mime_type) tuple or None.
+    """
+    client = _get_client(api_key)
+
+    parts: list = []
+    image_index = 0
+    for img_entry in images:
+        image_index += 1
+        if img_entry is None:
+            continue
+        img_bytes, img_mime = img_entry
+        parts.append(genai_types.Part(text=f"Image {image_index}:"))
+        parts.append(
+            genai_types.Part(
+                inline_data=genai_types.Blob(data=img_bytes, mime_type=img_mime)
+            )
+        )
+
     parts.append(genai_types.Part(text=user_prompt))
 
     response = _call_with_retry(lambda: client.models.generate_content(
@@ -225,19 +311,16 @@ async def analyze_scene(
     system_prompt = _build_system_prompt(m, d)
 
     png_bytes = None
+    img_mime_type = "image/png"
     image_sent = False
     try:
-        renderer = mgr.require_renderer(slot)  # raises RuntimeError when no GL renderer available
-        cam_id = resolve_camera(m, camera)
-        update_scene(renderer, d, camera_id=cam_id)
-        pixels = renderer.render()
-        img = Image.fromarray(pixels)
-        if img.width != width or img.height != height:  # only resize when dimensions differ (fix I-2)
-            img = img.resize((width, height), Image.LANCZOS)
-        buf = BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        png_bytes = buf.getvalue()
-        image_sent = True
+        result = _render_slot_image(mgr, slot, camera, width, height)
+        if result is not None:
+            png_bytes, img_mime_type = result
+            image_sent = True
+        else:
+            # _render_slot_image returned None (renderer raised or image failed)
+            system_prompt += "\n\n*Note: No rendered image available — analysis based on metadata only.*"
     except RuntimeError:
         # require_renderer raises RuntimeError when no GL renderer available
         system_prompt += "\n\n*Note: No rendered image available — analysis based on metadata only.*"
@@ -254,6 +337,7 @@ async def analyze_scene(
             system_prompt=system_prompt,
             user_prompt=prompt,
             png_bytes=png_bytes,
+            mime_type=img_mime_type if image_sent else "image/png",
         ))
     except Exception as e:
         return _make_error(
@@ -267,78 +351,6 @@ async def analyze_scene(
         "image_sent": image_sent,
         "sim_time": float(d.time),
     }, ensure_ascii=False)
-
-
-# ---------------------------------------------------------------------------
-# Private helpers shared by analyze_scene and compare_scenes
-# ---------------------------------------------------------------------------
-
-def _render_slot_png(
-    mgr,
-    slot,
-    camera: str | None,
-    width: int,
-    height: int,
-) -> "bytes | None":
-    """Render *slot* to a PNG byte-string.  Returns None when rendering fails."""
-    try:
-        renderer = mgr.require_renderer(slot)
-        cam_id = resolve_camera(slot.model, camera)
-        update_scene(renderer, slot.data, camera_id=cam_id)
-        pixels = renderer.render()
-        img = Image.fromarray(pixels)
-        if img.width != width or img.height != height:
-            img = img.resize((width, height), Image.LANCZOS)
-        buf = BytesIO()
-        img.save(buf, format="PNG", optimize=True)
-        return buf.getvalue()
-    except Exception as e:
-        logger.warning("_render_slot_png failed for slot %r: %s", getattr(slot, "name", "?"), e)
-        return None
-
-
-def _call_gemini_multi_image(
-    api_key: str,
-    model: str,
-    system_prompt: str,
-    user_prompt: str,
-    images: "list[bytes | None]",
-) -> str:
-    """Send multiple images + prompt to Gemini.  Returns response text.
-
-    Each image is preceded by a text label ("Image 1:", "Image 2:", …).
-    None entries are silently skipped (the label is still omitted).
-    """
-    client = _get_client(api_key)
-
-    parts: list = []
-    image_index = 0
-    for img_bytes in images:
-        image_index += 1
-        if img_bytes is None:
-            continue
-        parts.append(genai_types.Part(text=f"Image {image_index}:"))
-        parts.append(
-            genai_types.Part(
-                inline_data=genai_types.Blob(data=img_bytes, mime_type="image/png")
-            )
-        )
-
-    parts.append(genai_types.Part(text=user_prompt))
-
-    response = _call_with_retry(lambda: client.models.generate_content(
-        model=model,
-        contents=[genai_types.Content(role="user", parts=parts)],
-        config=genai_types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=0.1,
-        ),
-    ))
-    text = response.text
-    if text is None:
-        finish = getattr(response, "finish_reason", "unknown")
-        raise ValueError(f"Gemini returned no text (finish_reason={finish})")
-    return text
 
 
 # ---------------------------------------------------------------------------
@@ -415,10 +427,12 @@ async def compare_scenes(
     slot_obj_b = mgr.get(name_b)
 
     # ------------------------------------------------------------------
-    # Render each slot
+    # Render each slot — returns (bytes, mime_type) tuple or None
     # ------------------------------------------------------------------
-    png_bytes_a = _render_slot_png(mgr, slot_obj_a, camera, width, height)
-    png_bytes_b = _render_slot_png(mgr, slot_obj_b, camera, width, height)
+    result_a = _render_slot_image(mgr, slot_obj_a, camera, width, height)
+    result_b = _render_slot_image(mgr, slot_obj_b, camera, width, height)
+    img_bytes_a, mime_a = result_a if result_a else (None, "image/png")
+    img_bytes_b, mime_b = result_b if result_b else (None, "image/png")
 
     # ------------------------------------------------------------------
     # Build combined system prompt
@@ -436,14 +450,14 @@ async def compare_scenes(
         "Compare them carefully and answer the user's question.",
     ])
 
-    if png_bytes_a is None and png_bytes_b is None:
+    if img_bytes_a is None and img_bytes_b is None:
         system_prompt += (
             "\n\n*Note: Neither scene could be rendered — "
             "comparison is based on metadata only.*"
         )
-    elif png_bytes_a is None:
+    elif img_bytes_a is None:
         system_prompt += f"\n\n*Note: Image for Slot A ('{name_a}') unavailable — using metadata only.*"
-    elif png_bytes_b is None:
+    elif img_bytes_b is None:
         system_prompt += f"\n\n*Note: Image for Slot B ('{name_b}') unavailable — using metadata only.*"
 
     # ------------------------------------------------------------------
@@ -458,7 +472,10 @@ async def compare_scenes(
                 model=model,
                 system_prompt=system_prompt,
                 user_prompt=prompt,
-                images=[png_bytes_a, png_bytes_b],
+                images=[
+                    (img_bytes_a, mime_a) if img_bytes_a else None,
+                    (img_bytes_b, mime_b) if img_bytes_b else None,
+                ],
             ),
         )
     except Exception as e:
@@ -467,7 +484,7 @@ async def compare_scenes(
             str(e),
         )
 
-    images_sent = sum(1 for b in [png_bytes_a, png_bytes_b] if b is not None)
+    images_sent = sum(1 for b in [img_bytes_a, img_bytes_b] if b is not None)
     return json.dumps(
         {
             "comparison": analysis,
@@ -548,7 +565,7 @@ async def track_object(
     # Step simulation, record trajectory, capture keyframes
     # ------------------------------------------------------------------
     full_trajectory: list[dict] = []
-    keyframe_images: list[bytes | None] = []
+    keyframe_images: list[tuple[bytes, str] | None] = []
 
     for step in range(n_steps):
         mujoco.mj_step(m, d)
@@ -557,8 +574,8 @@ async def track_object(
             "pos": d.xpos[body_id].tolist(),
         })
         if capture_every > 0 and step % capture_every == 0:
-            png = _render_slot_png(mgr, slot, camera, width, height)
-            keyframe_images.append(png)
+            img_result = _render_slot_image(mgr, slot, camera, width, height)
+            keyframe_images.append(img_result)
 
     # ------------------------------------------------------------------
     # Downsample trajectory if too large (keep at most 1000 points)
