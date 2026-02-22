@@ -1,0 +1,13 @@
+<mujoco model="box_drop">
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <worldbody>
+    <geom name="floor" type="plane" size="5 5 0.1" pos="0 0 0"
+          rgba="0.8 0.8 0.8 1" friction="1 0.005 0.001"/>
+    <body name="box" pos="0 0 1">
+      <joint name="box_freejoint" type="free"/>
+      <geom name="box_geom" type="box" size="0.1 0.1 0.1" mass="1"
+            rgba="0.2 0.5 0.8 1" friction="1 0.005 0.001"/>
+    </body>
+  </worldbody>
+</mujoco>
