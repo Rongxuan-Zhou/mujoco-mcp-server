@@ -460,3 +460,14 @@ def test_render_figure_strip_restores_state():
     np.testing.assert_array_almost_equal(slot.data.qpos, original_qpos)
     np.testing.assert_array_almost_equal(slot.data.qvel, original_qvel)
     assert abs(slot.data.time - original_time) < 1e-9
+
+
+def test_render_figure_strip_empty_timestamps():
+    """Empty timestamps list returns INVALID_ARGS error."""
+    import asyncio
+    ctx, slot = _make_ctx_with_trajectory()
+    from mujoco_mcp.tools.vision import render_figure_strip
+    result = asyncio.run(render_figure_strip(ctx, timestamps=[]))
+    assert len(result) >= 1
+    data_out = json.loads(result[0].text)
+    assert data_out["error"] == "INVALID_ARGS"

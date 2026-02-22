@@ -751,7 +751,7 @@ async def render_figure_strip(
     timestamps_rendered: list[float] = []
     nearest_frames: list[float] = []
     images: list[ImageContent] = []
-    return_value: list[TextContent | ImageContent] = []
+    return_value: list = []
 
     try:
         for ts in timestamps:
@@ -795,6 +795,11 @@ async def render_figure_strip(
             }, ensure_ascii=False),
         )
         return_value = [summary] + images
+    except Exception as e:
+        return_value = [TextContent(
+            type="text",
+            text=_make_error("RENDER_ERROR", str(e)),
+        )]
     finally:
         # Restore original state unconditionally
         d.qpos[:] = saved_qpos
