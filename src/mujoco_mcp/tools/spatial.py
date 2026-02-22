@@ -64,17 +64,11 @@ def _geom_aabb_world(
         half = np.array([r, r, h + r])
     elif gtype == mujoco.mjtGeom.mjGEOM_MESH:
         mesh_id = model.geom_dataid[geom_id]
-        aabb = model.mesh_aabb[mesh_id]          # [cx, cy, cz, hx, hy, hz] in mesh local frame
-        center_local = aabb[:3]
-        half_m = aabb[3:6]
-        corners = []
-        for sx in (-1, 1):
-            for sy in (-1, 1):
-                for sz in (-1, 1):
-                    lp = center_local + np.array([sx * half_m[0], sy * half_m[1], sz * half_m[2]])
-                    corners.append(pos + mat @ lp)
-        arr = np.array(corners)
-        return arr.min(axis=0), arr.max(axis=0)
+        vert_adr = model.mesh_vertadr[mesh_id]
+        vert_num = model.mesh_vertnum[mesh_id]
+        verts = model.mesh_vert[vert_adr:vert_adr + vert_num]  # (N, 3) local frame
+        world_verts = (mat @ verts.T).T + pos
+        return world_verts.min(axis=0), world_verts.max(axis=0)
     else:
         # Ellipsoid, SDF, etc. — use bounding sphere
         half = np.full(3, size[0])
