@@ -361,3 +361,30 @@ def test_render_slot_image_large_uses_jpeg(monkeypatch):
     assert result is not None
     img_bytes, mime_type = result
     assert mime_type == "image/jpeg"
+
+
+# ── Task 3 tests ──────────────────────────────────────────────────────────────
+
+from mujoco_mcp.tools.vision import _detect_intent
+
+
+def test_detect_intent_physics_keywords():
+    assert _detect_intent("What contact forces are acting?") == "physics"
+    assert _detect_intent("Is there a collision between the box and the floor?") == "physics"
+    assert _detect_intent("How much friction force is there?") == "physics"
+
+
+def test_detect_intent_kinematics_keywords():
+    assert _detect_intent("What is the joint angle of the elbow?") == "kinematics"
+    assert _detect_intent("Where is the end effector positioned?") == "kinematics"
+    assert _detect_intent("Describe the robot pose.") == "kinematics"
+
+
+def test_detect_intent_comparison_keywords():
+    assert _detect_intent("What changed between the two states?") == "comparison"
+    assert _detect_intent("Compare the before and after positions.") == "comparison"
+
+
+def test_detect_intent_general_fallback():
+    assert _detect_intent("Tell me about the scene.") == "general"
+    assert _detect_intent("Describe what you see.") == "general"

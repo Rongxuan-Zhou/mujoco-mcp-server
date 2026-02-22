@@ -73,7 +73,25 @@ def _call_with_retry(fn, max_retries: int = 3, base_delay: float = 2.0):
             raise
 
 
-def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData") -> str:
+# ── Intent detection ──────────────────────────────────────────────────────────
+
+_INTENT_KEYWORDS: dict[str, list[str]] = {
+    "physics": ["contact", "touch", "force", "collision", "friction", "penetration", "impact"],
+    "comparison": ["compare", "difference", "change", "before", "after", "versus", "vs", "between"],
+    "kinematics": ["pose", "position", "joint", "angle", "where", "extend", "reach", "end-effector", "link"],
+}
+
+
+def _detect_intent(prompt: str) -> str:
+    """Classify *prompt* into one of: physics, kinematics, comparison, general."""
+    lower = prompt.lower()
+    for intent, keywords in _INTENT_KEYWORDS.items():
+        if any(kw in lower for kw in keywords):
+            return intent
+    return "general"
+
+
+def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData", intent: str = "general") -> str:
     """Build a rich system prompt with full scene metadata for Gemini."""
     # Body names and world positions
     body_info = []
@@ -132,17 +150,38 @@ def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData") -> str:
     if contact_lines:
         parts += ["", f"### Active Contacts ({d.ncon} total, showing up to 5)", "\n".join(contact_lines)]
 
+    _INTENT_GUIDANCE = {
+        "physics": (
+            "**Physics Focus**: Quantify contact normal forces (estimated from penetration depth and stiffness). "
+            "Name the geom pairs in contact. Report penetration depth in millimeters. "
+            "Describe friction direction if visible."
+        ),
+        "kinematics": (
+            "**Kinematics Focus**: List each joint angle in radians. "
+            "Describe the end-effector world position in (x, y, z) meters. "
+            "Note any joint near its limit (within 10% of range)."
+        ),
+        "comparison": (
+            "**Comparison Focus**: For each body/joint that changed, report delta-position and delta-angle. "
+            "Use format: 'body_name: before -> after (delta = value)'. "
+            "Summarise the most significant change first."
+        ),
+        "general": "",
+    }
+
+    guidance = _INTENT_GUIDANCE.get(intent, "")
     parts += [
         "",
         "## Response Format",
         "Structure your answer with these sections (omit sections not relevant to the question):",
         "**Pose**: Describe body/joint positions and orientations.",
-        "**Contacts**: Describe what is touching what and estimated forces.",
-        "**Dynamics**: Velocity, acceleration, or energy observations.",
+        "**Contacts**: Describe what is touching what.",
+        "**Dynamics**: Velocity or energy observations.",
         "**Answer**: Direct answer to the user's question.",
-        "",
-        "Be concise and precise. Use metric units (meters, radians, N). Prefer numbers over vague terms.",
     ]
+    if guidance:
+        parts += ["", guidance]
+    parts += ["", "Be concise and precise. Use metric units (meters, radians). Prefer numbers over vague terms."]
 
     return "\n".join(parts)
 
@@ -313,7 +352,8 @@ async def analyze_scene(
     slot = mgr.get(sim_name)
     m, d = slot.model, slot.data
 
-    system_prompt = _build_system_prompt(m, d)
+    intent = _detect_intent(prompt)
+    system_prompt = _build_system_prompt(m, d, intent=intent)
 
     png_bytes = None
     img_mime_type = "image/png"
@@ -442,8 +482,8 @@ async def compare_scenes(
     # ------------------------------------------------------------------
     # Build combined system prompt
     # ------------------------------------------------------------------
-    prompt_a = _build_system_prompt(slot_obj_a.model, slot_obj_a.data)
-    prompt_b = _build_system_prompt(slot_obj_b.model, slot_obj_b.data)
+    prompt_a = _build_system_prompt(slot_obj_a.model, slot_obj_a.data, intent="comparison")
+    prompt_b = _build_system_prompt(slot_obj_b.model, slot_obj_b.data, intent="comparison")
 
     system_prompt = "\n\n".join([
         f"## Slot A — '{name_a}'",
