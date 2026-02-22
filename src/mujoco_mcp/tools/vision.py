@@ -207,9 +207,14 @@ def _render_slot_image(
         if img.width != width or img.height != height:
             img = img.resize((width, height), Image.LANCZOS)
         buf = BytesIO()
+        # Convert to RGB before any format-specific save (JPEG cannot handle RGBA)
+        img = img.convert("RGB")
         use_jpeg = (width * height) > 262144
         if use_jpeg:
-            quality = int(os.environ.get("MUJOCO_MCP_VISION_JPEG_QUALITY", "85"))
+            try:
+                quality = max(1, min(95, int(os.environ.get("MUJOCO_MCP_VISION_JPEG_QUALITY", "85"))))
+            except ValueError:
+                quality = 85
             img.save(buf, format="JPEG", quality=quality, optimize=True)
             mime_type = "image/jpeg"
         else:
