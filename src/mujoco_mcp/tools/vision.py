@@ -24,6 +24,80 @@ except ImportError:
     _GENAI_AVAILABLE = False
 
 
+def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData") -> str:
+    """Build a rich system prompt with full scene metadata for Gemini."""
+    # Body names and world positions
+    body_info = []
+    for i in range(m.nbody):
+        name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, i) or f"<body:{i}>"
+        pos = d.xpos[i]
+        body_info.append(f"  {name}: pos=({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})m")
+
+    # Joint state: name, qpos, qvel
+    joint_lines = []
+    qpos_idx = 0
+    for i in range(m.njnt):
+        name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, i) or f"<joint:{i}>"
+        jtype = m.jnt_type[i]
+        # Free joint has 7 qpos, hinge/slide has 1
+        nq = 7 if jtype == mujoco.mjtJoint.mjJNT_FREE else 1
+        qp = d.qpos[qpos_idx:qpos_idx + nq]
+        qv = d.qvel[qpos_idx:qpos_idx + nq] if qpos_idx + nq <= len(d.qvel) else []
+        qpos_str = ", ".join(f"{v:.3f}" for v in qp)
+        qvel_str = ", ".join(f"{v:.3f}" for v in qv)
+        joint_lines.append(f"  {name}: qpos=[{qpos_str}] qvel=[{qvel_str}] rad/s")
+        qpos_idx += nq
+
+    # Actuator commands
+    actuator_lines = []
+    for i in range(m.nu):
+        name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or f"<act:{i}>"
+        actuator_lines.append(f"  {name}: ctrl={d.ctrl[i]:.3f}")
+
+    # Contact summary (top 5 by force magnitude)
+    contact_lines = []
+    for c in range(min(d.ncon, 5)):
+        con = d.contact[c]
+        geom1 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, con.geom1) or f"geom{con.geom1}"
+        geom2 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, con.geom2) or f"geom{con.geom2}"
+        contact_lines.append(
+            f"  {geom1} <-> {geom2} at ({con.pos[0]:.3f},{con.pos[1]:.3f},{con.pos[2]:.3f})m"
+        )
+
+    parts = [
+        "You are an expert robotics simulation analyst examining a MuJoCo physics simulation.",
+        "",
+        "## Scene State",
+        f"Time: {d.time:.4f}s | Active contacts: {d.ncon}",
+        "",
+        "### Body Positions (world frame)",
+        "\n".join(body_info),
+        "",
+        "### Joint State (position & velocity)",
+        "\n".join(joint_lines) if joint_lines else "  (no joints)",
+    ]
+
+    if actuator_lines:
+        parts += ["", "### Actuator Commands", "\n".join(actuator_lines)]
+
+    if contact_lines:
+        parts += ["", f"### Active Contacts ({d.ncon} total, showing up to 5)", "\n".join(contact_lines)]
+
+    parts += [
+        "",
+        "## Response Format",
+        "Structure your answer with these sections (omit sections not relevant to the question):",
+        "**Pose**: Describe body/joint positions and orientations.",
+        "**Contacts**: Describe what is touching what and estimated forces.",
+        "**Dynamics**: Velocity, acceleration, or energy observations.",
+        "**Answer**: Direct answer to the user's question.",
+        "",
+        "Be concise and precise. Use metric units (meters, radians, N). Prefer numbers over vague terms.",
+    ]
+
+    return "\n".join(parts)
+
+
 def _call_gemini(
     api_key: str,
     model: str,
@@ -101,25 +175,7 @@ async def analyze_scene(
     slot = mgr.get(sim_name)
     m, d = slot.model, slot.data
 
-    body_names = [
-        mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, i) or f"<body:{i}>"
-        for i in range(m.nbody)
-    ]
-    joint_names = [
-        mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, i) or f"<joint:{i}>"
-        for i in range(m.njnt)
-    ]
-    qpos_str = ", ".join(f"{v:.3f}" for v in d.qpos)
-
-    system_prompt = (
-        "You are a robotics simulation analyst. The image shows a MuJoCo physics simulation.\n\n"
-        f"Scene metadata:\n"
-        f"- Bodies: {body_names}\n"
-        f"- Joints: {joint_names} with current qpos: [{qpos_str}]\n"
-        f"- Time: {d.time:.3f}s | Contacts: {d.ncon}\n\n"
-        "Answer the user's question concisely and precisely, focusing on spatial "
-        "relationships, robot pose, and physical state. Use metric units (meters, radians)."
-    )
+    system_prompt = _build_system_prompt(m, d)
 
     png_bytes = None
     image_sent = False
@@ -137,7 +193,7 @@ async def analyze_scene(
         image_sent = True
     except RuntimeError:
         # require_renderer raises RuntimeError when no GL renderer available
-        system_prompt += "\n\n(No image available — answer based on metadata only.)"
+        system_prompt += "\n\n*Note: No rendered image available — analysis based on metadata only.*"
     except Exception as e:
         # Renderer present but image capture failed
         system_prompt += f"\n\n(Image capture failed: {e} — answering from metadata only.)"
