@@ -16,6 +16,42 @@ from . import safe_tool
 
 logger = logging.getLogger(__name__)
 
+import time
+
+# ── Error helpers ─────────────────────────────────────────────────────────────
+
+def _make_error(code: str, message: str, **kwargs) -> str:
+    """Return a JSON error string with standardised fields."""
+    return json.dumps({"error": code, "message": message, **kwargs}, ensure_ascii=False)
+
+
+# ── Gemini client cache ───────────────────────────────────────────────────────
+
+_gemini_client_cache: dict = {}
+
+
+def _get_client(api_key: str):
+    """Return a cached Gemini client for *api_key*."""
+    if api_key not in _gemini_client_cache:
+        _gemini_client_cache[api_key] = genai.Client(api_key=api_key)
+    return _gemini_client_cache[api_key]
+
+
+# ── Retry wrapper ─────────────────────────────────────────────────────────────
+
+def _call_with_retry(fn, max_retries: int = 3, base_delay: float = 2.0):
+    """Call *fn()* with exponential-backoff retry on 429 / RESOURCE_EXHAUSTED."""
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+            if is_rate_limit and attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+
+
 try:
     from google import genai
     from google.genai import types as genai_types
@@ -106,7 +142,7 @@ def _call_gemini(
     png_bytes: bytes | None,
 ) -> str:
     """Send image + prompt to Gemini. Returns response text."""
-    client = genai.Client(api_key=api_key)
+    client = _get_client(api_key)
 
     parts = []
     if png_bytes:
@@ -117,14 +153,14 @@ def _call_gemini(
         )
     parts.append(genai_types.Part(text=user_prompt))
 
-    response = client.models.generate_content(
+    response = _call_with_retry(lambda: client.models.generate_content(
         model=model,
         contents=[genai_types.Content(role="user", parts=parts)],
         config=genai_types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=0.1,
         ),
-    )
+    ))
     text = response.text
     if text is None:
         finish = getattr(response, "finish_reason", "unknown")
@@ -161,13 +197,11 @@ async def analyze_scene(
         JSON: {"analysis": str, "model": str, "image_sent": bool, "sim_time": float}
     """
     if not _GENAI_AVAILABLE:
-        return json.dumps({"error": "google-genai not installed. Run: pip install 'mujoco-mcp-server[vision]'"})
+        return _make_error("NO_GENAI", "google-genai not installed. Run: pip install 'mujoco-mcp-server[vision]'")
 
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        return json.dumps({
-            "error": "GEMINI_API_KEY not set. Export it: export GEMINI_API_KEY=your_key"
-        })
+        return _make_error("NO_API_KEY", "GEMINI_API_KEY not set. Export it: export GEMINI_API_KEY=your_key")
 
     model = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-pro")
 
@@ -209,7 +243,10 @@ async def analyze_scene(
             png_bytes=png_bytes,
         ))
     except Exception as e:
-        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+        return _make_error(
+            "QUOTA_EXCEEDED" if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) else "GEMINI_ERROR",
+            str(e),
+        )
 
     return json.dumps({
         "analysis": analysis,
@@ -259,7 +296,7 @@ def _call_gemini_multi_image(
     Each image is preceded by a text label ("Image 1:", "Image 2:", …).
     None entries are silently skipped (the label is still omitted).
     """
-    client = genai.Client(api_key=api_key)
+    client = _get_client(api_key)
 
     parts: list = []
     image_index = 0
@@ -276,14 +313,14 @@ def _call_gemini_multi_image(
 
     parts.append(genai_types.Part(text=user_prompt))
 
-    response = client.models.generate_content(
+    response = _call_with_retry(lambda: client.models.generate_content(
         model=model,
         contents=[genai_types.Content(role="user", parts=parts)],
         config=genai_types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=0.1,
         ),
-    )
+    ))
     text = response.text
     if text is None:
         finish = getattr(response, "finish_reason", "unknown")
@@ -327,15 +364,11 @@ async def compare_scenes(
         JSON: {"comparison": str, "model": str, "images_sent": int, "slots": [str, str]}
     """
     if not _GENAI_AVAILABLE:
-        return json.dumps({
-            "error": "google-genai not installed. Run: pip install 'mujoco-mcp-server[vision]'"
-        })
+        return _make_error("NO_GENAI", "google-genai not installed. Run: pip install 'mujoco-mcp-server[vision]'")
 
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        return json.dumps({
-            "error": "GEMINI_API_KEY not set. Export it: export GEMINI_API_KEY=your_key"
-        })
+        return _make_error("NO_API_KEY", "GEMINI_API_KEY not set. Export it: export GEMINI_API_KEY=your_key")
 
     model = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-pro")
 
@@ -347,23 +380,21 @@ async def compare_scenes(
     if slot_a is None and slot_b is None:
         all_slots = list(mgr.snapshot_slots().keys())
         if len(all_slots) < 2:
-            return json.dumps({
-                "error": (
-                    f"compare_scenes needs at least 2 loaded slots, "
-                    f"but only {len(all_slots)} found: {all_slots}"
-                )
-            })
+            return _make_error(
+                "INVALID_ARGS",
+                f"compare_scenes needs at least 2 loaded slots, but only {len(all_slots)} found: {all_slots}",
+            )
         name_a, name_b = all_slots[0], all_slots[1]
     elif slot_a is not None and slot_b is None:
-        return json.dumps({
-            "error": "slot_b must be provided when slot_a is specified. "
-                     "Pass both slot names, or omit both to auto-select."
-        })
+        return _make_error(
+            "INVALID_ARGS",
+            "slot_b must be provided when slot_a is specified. Pass both slot names, or omit both to auto-select.",
+        )
     elif slot_a is None and slot_b is not None:
-        return json.dumps({
-            "error": "slot_a must be provided when slot_b is specified. "
-                     "Pass both slot names, or omit both to auto-select."
-        })
+        return _make_error(
+            "INVALID_ARGS",
+            "slot_a must be provided when slot_b is specified. Pass both slot names, or omit both to auto-select.",
+        )
     else:
         name_a, name_b = slot_a, slot_b  # type: ignore[assignment]
 
@@ -418,7 +449,10 @@ async def compare_scenes(
             ),
         )
     except Exception as e:
-        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+        return _make_error(
+            "QUOTA_EXCEEDED" if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) else "GEMINI_ERROR",
+            str(e),
+        )
 
     images_sent = sum(1 for b in [png_bytes_a, png_bytes_b] if b is not None)
     return json.dumps(
@@ -495,9 +529,7 @@ async def track_object(
             mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, i) or f"<body:{i}>"
             for i in range(m.nbody)
         ]
-        return json.dumps({
-            "error": f"Body '{body_name}' not found. Available bodies: {available}"
-        })
+        return _make_error("BODY_NOT_FOUND", f"Body '{body_name}' not found. Available bodies: {available}")
 
     # ------------------------------------------------------------------
     # Step simulation, record trajectory, capture keyframes

@@ -47,7 +47,9 @@ def test_analyze_scene_returns_json_with_analysis(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
+    import mujoco_mcp.tools.vision as vision_mod
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
+        vision_mod._gemini_client_cache.clear()
         import asyncio
         from mujoco_mcp.tools.vision import analyze_scene
         ctx = _make_ctx(has_renderer=True)
@@ -70,7 +72,8 @@ def test_analyze_scene_no_api_key(monkeypatch):
     result = asyncio.run(analyze_scene(ctx, prompt="describe the scene"))
     data = json.loads(result)
     assert "error" in data
-    assert "GEMINI_API_KEY" in data["error"]
+    assert data["error"] == "NO_API_KEY"
+    assert "GEMINI_API_KEY" in data["message"]
 
 
 def test_analyze_scene_no_renderer_fallback(monkeypatch):
@@ -81,7 +84,9 @@ def test_analyze_scene_no_renderer_fallback(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
+    import mujoco_mcp.tools.vision as vision_mod
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
+        vision_mod._gemini_client_cache.clear()
         import asyncio
         from mujoco_mcp.tools.vision import analyze_scene
         ctx = _make_ctx(has_renderer=False)
@@ -98,7 +103,9 @@ def test_analyze_scene_gemini_error_handled(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.side_effect = Exception("API quota exceeded")
 
+    import mujoco_mcp.tools.vision as vision_mod
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
+        vision_mod._gemini_client_cache.clear()
         import asyncio
         from mujoco_mcp.tools.vision import analyze_scene
         ctx = _make_ctx()
@@ -106,7 +113,8 @@ def test_analyze_scene_gemini_error_handled(monkeypatch):
 
     data = json.loads(result)
     assert "error" in data
-    assert "API quota exceeded" in data["error"]
+    assert data["error"] in ("QUOTA_EXCEEDED", "GEMINI_ERROR")
+    assert "API quota exceeded" in data["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +169,9 @@ def test_compare_scenes_happy_path(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
+    import mujoco_mcp.tools.vision as vision_mod
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
+        vision_mod._gemini_client_cache.clear()
         import asyncio
         from mujoco_mcp.tools.vision import compare_scenes
         ctx = _make_ctx_two_slots(has_renderer=True)
@@ -184,7 +194,9 @@ def test_compare_scenes_auto_slot_selection(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
+    import mujoco_mcp.tools.vision as vision_mod
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
+        vision_mod._gemini_client_cache.clear()
         import asyncio
         from mujoco_mcp.tools.vision import compare_scenes
         ctx = _make_ctx_two_slots(has_renderer=True)
@@ -204,7 +216,8 @@ def test_compare_scenes_no_api_key(monkeypatch):
     result = asyncio.run(compare_scenes(ctx, prompt="compare", slot_a="alpha", slot_b="beta"))
     data = json.loads(result)
     assert "error" in data
-    assert "GEMINI_API_KEY" in data["error"]
+    assert data["error"] == "NO_API_KEY"
+    assert "GEMINI_API_KEY" in data["message"]
 
 
 def test_compare_scenes_only_slot_a_given(monkeypatch):
@@ -217,7 +230,8 @@ def test_compare_scenes_only_slot_a_given(monkeypatch):
     result = asyncio.run(compare_scenes(ctx, prompt="compare", slot_a="alpha"))
     data = json.loads(result)
     assert "error" in data
-    assert "slot_b" in data["error"]
+    assert data["error"] == "INVALID_ARGS"
+    assert "slot_b" in data["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -254,5 +268,53 @@ def test_track_object_unknown_body_returns_error():
     data = json.loads(result)
 
     assert "error" in data
-    assert "does_not_exist" in data["error"]
-    assert "Available bodies" in data["error"]
+    assert data["error"] == "BODY_NOT_FOUND"
+    assert "does_not_exist" in data["message"]
+    assert "Available bodies" in data["message"]
+
+
+# ── Task 1 tests ──────────────────────────────────────────────────────────────
+
+from mujoco_mcp.tools.vision import _make_error, _call_with_retry
+
+
+def test_make_error_basic_fields():
+    result = json.loads(_make_error("NO_API_KEY", "key missing"))
+    assert result["error"] == "NO_API_KEY"
+    assert result["message"] == "key missing"
+
+
+def test_make_error_extra_kwargs():
+    result = json.loads(_make_error("QUOTA_EXCEEDED", "too many", retry_after=2.0))
+    assert result["retry_after"] == 2.0
+
+
+def test_call_with_retry_succeeds_immediately():
+    calls = []
+    def fn():
+        calls.append(1)
+        return "ok"
+    assert _call_with_retry(fn) == "ok"
+    assert len(calls) == 1
+
+
+def test_call_with_retry_retries_on_429():
+    calls = []
+    def fn():
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED quota")
+        return "ok"
+    import unittest.mock as mock
+    with mock.patch("time.sleep"):
+        result = _call_with_retry(fn, max_retries=3, base_delay=0.001)
+    assert result == "ok"
+    assert len(calls) == 3
+
+
+def test_call_with_retry_raises_non_rate_limit():
+    def fn():
+        raise ValueError("bad model")
+    import pytest
+    with pytest.raises(ValueError, match="bad model"):
+        _call_with_retry(fn, max_retries=3)
