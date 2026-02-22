@@ -11,6 +11,7 @@ from io import BytesIO
 import mujoco
 from PIL import Image
 from mcp.server.fastmcp import Context
+from mcp.types import TextContent, ImageContent
 
 from .._registry import mcp
 from ..compat import resolve_camera, update_scene
@@ -712,7 +713,7 @@ async def render_figure_strip(
     timestamps: list[float],
     sim_name: str | None = None,
     camera: str | None = None,
-) -> list:
+) -> "list[TextContent | ImageContent]":
     """Render frames at specified timestamps from a recorded trajectory.
 
     Sets simulation state to the nearest recorded frame for each timestamp
@@ -722,7 +723,6 @@ async def render_figure_strip(
     """
     import bisect
     import base64
-    from mcp.types import TextContent, ImageContent
 
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
@@ -736,61 +736,70 @@ async def render_figure_strip(
                              "No trajectory recorded. Use sim_record(action='start') then sim_step."),
         )]
 
+    if not timestamps:
+        return [TextContent(
+            type="text",
+            text=_make_error("INVALID_ARGS", "timestamps must be a non-empty list."),
+        )]
+
     # Save current state to restore afterwards
     saved_qpos = d.qpos.copy()
     saved_qvel = d.qvel.copy()
     saved_time = float(d.time)
 
     traj_times = [frame["t"] for frame in traj]
-    timestamps_rendered = []
-    nearest_frames = []
-    images: list = []
+    timestamps_rendered: list[float] = []
+    nearest_frames: list[float] = []
+    images: list[ImageContent] = []
+    return_value: list[TextContent | ImageContent] = []
 
-    for ts in timestamps:
-        idx = bisect.bisect_left(traj_times, ts)
-        if idx == 0:
-            nearest_idx = 0
-        elif idx >= len(traj):
-            nearest_idx = len(traj) - 1
-        else:
-            before = traj_times[idx - 1]
-            after = traj_times[idx]
-            nearest_idx = idx - 1 if abs(ts - before) <= abs(ts - after) else idx
+    try:
+        for ts in timestamps:
+            idx = bisect.bisect_left(traj_times, ts)
+            if idx == 0:
+                nearest_idx = 0
+            elif idx >= len(traj):
+                nearest_idx = len(traj) - 1
+            else:
+                before = traj_times[idx - 1]
+                after = traj_times[idx]
+                nearest_idx = idx - 1 if abs(ts - before) <= abs(ts - after) else idx
 
-        frame = traj[nearest_idx]
-        actual_t = frame["t"]
+            frame = traj[nearest_idx]
+            actual_t = frame["t"]
 
-        qpos = frame["qpos"]
-        qvel = frame["qvel"]
-        d.qpos[:] = qpos
-        d.qvel[:] = qvel
-        d.time = actual_t
+            qpos = frame["qpos"]
+            qvel = frame["qvel"]
+            d.qpos[:] = qpos
+            d.qvel[:] = qvel
+            d.time = actual_t
+            mujoco.mj_forward(m, d)
+
+            result = _render_slot_image(mgr, slot, camera, width=640, height=480)
+            if result is not None:
+                img_bytes, mime_type = result
+                images.append(ImageContent(
+                    type="image",
+                    data=base64.b64encode(img_bytes).decode(),
+                    mimeType=mime_type,
+                ))
+
+            timestamps_rendered.append(ts)
+            nearest_frames.append(actual_t)
+
+        summary = TextContent(
+            type="text",
+            text=json.dumps({
+                "timestamps_rendered": timestamps_rendered,
+                "nearest_frames": nearest_frames,
+            }, ensure_ascii=False),
+        )
+        return_value = [summary] + images
+    finally:
+        # Restore original state unconditionally
+        d.qpos[:] = saved_qpos
+        d.qvel[:] = saved_qvel
+        d.time = saved_time
         mujoco.mj_forward(m, d)
 
-        result = _render_slot_image(mgr, slot, camera, width=640, height=480)
-        if result is not None:
-            img_bytes, mime_type = result
-            images.append(ImageContent(
-                type="image",
-                data=base64.b64encode(img_bytes).decode(),
-                mimeType=mime_type,
-            ))
-
-        timestamps_rendered.append(ts)
-        nearest_frames.append(actual_t)
-
-    # Restore original state
-    d.qpos[:] = saved_qpos
-    d.qvel[:] = saved_qvel
-    d.time = saved_time
-    mujoco.mj_forward(m, d)
-
-    summary = TextContent(
-        type="text",
-        text=json.dumps({
-            "timestamps_rendered": timestamps_rendered,
-            "nearest_frames": nearest_frames,
-        }, ensure_ascii=False),
-    )
-
-    return [summary] + images
+    return return_value
