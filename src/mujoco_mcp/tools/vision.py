@@ -103,18 +103,20 @@ def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData", intent: str = 
 
     # Joint state: name, qpos, qvel
     joint_lines = []
-    qpos_idx = 0
     for i in range(m.njnt):
         name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, i) or f"<joint:{i}>"
-        jtype = m.jnt_type[i]
-        # Free joint has 7 qpos, hinge/slide has 1
-        nq = 7 if jtype == mujoco.mjtJoint.mjJNT_FREE else 1
-        qp = d.qpos[qpos_idx:qpos_idx + nq]
-        qv = d.qvel[qpos_idx:qpos_idx + nq] if qpos_idx + nq <= len(d.qvel) else []
+        # Use MuJoCo native address arrays for correct indexing.
+        # Free joints have nq=7 (pos) but nv=6 (vel), so a shared counter would
+        # mis-index qvel.  jnt_qposadr / jnt_dofadr give the exact start offsets.
+        qp_start  = int(m.jnt_qposadr[i])
+        qp_end    = int(m.jnt_qposadr[i + 1]) if i + 1 < m.njnt else m.nq
+        dof_start = int(m.jnt_dofadr[i])
+        dof_end   = int(m.jnt_dofadr[i + 1]) if i + 1 < m.njnt else m.nv
+        qp = d.qpos[qp_start:qp_end]
+        qv = d.qvel[dof_start:dof_end]
         qpos_str = ", ".join(f"{v:.3f}" for v in qp)
         qvel_str = ", ".join(f"{v:.3f}" for v in qv)
         joint_lines.append(f"  {name}: qpos=[{qpos_str}] qvel=[{qvel_str}] rad/s")
-        qpos_idx += nq
 
     # Actuator commands
     actuator_lines = []
