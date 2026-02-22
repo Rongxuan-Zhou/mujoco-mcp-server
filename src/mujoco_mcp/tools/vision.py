@@ -805,6 +805,9 @@ async def render_figure_strip(
         d.qpos[:] = saved_qpos
         d.qvel[:] = saved_qvel
         d.time = saved_time
-        mujoco.mj_forward(m, d)
+        try:
+            mujoco.mj_forward(m, d)
+        except Exception:
+            pass  # best-effort restore; do not obscure the original error
 
     return return_value
