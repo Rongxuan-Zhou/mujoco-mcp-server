@@ -1,8 +1,11 @@
 """Phase 4g: Vision API tool — analyze_scene via Gemini 2.5 Pro."""
 
 import asyncio
+import base64
+import bisect
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -59,6 +62,8 @@ def _get_client(api_key: str):
 
 def _call_with_retry(fn, max_retries: int = 3, base_delay: float = 2.0):
     """Call *fn()* with exponential-backoff retry on 429 / RESOURCE_EXHAUSTED."""
+    if max_retries < 1:
+        max_retries = 1
     for attempt in range(max_retries):
         try:
             return fn()
@@ -361,21 +366,12 @@ async def analyze_scene(
     png_bytes = None
     img_mime_type = "image/png"
     image_sent = False
-    try:
-        result = _render_slot_image(mgr, slot, camera, width, height)
-        if result is not None:
-            png_bytes, img_mime_type = result
-            image_sent = True
-        else:
-            # _render_slot_image returned None (renderer raised or image failed)
-            system_prompt += "\n\n*Note: No rendered image available — analysis based on metadata only.*"
-    except RuntimeError:
-        # require_renderer raises RuntimeError when no GL renderer available
+    result = _render_slot_image(mgr, slot, camera, width, height)
+    if result is not None:
+        png_bytes, img_mime_type = result
+        image_sent = True
+    else:
         system_prompt += "\n\n*Note: No rendered image available — analysis based on metadata only.*"
-    except Exception as e:
-        # Renderer present but image capture failed
-        system_prompt += f"\n\n(Image capture failed: {e} — answering from metadata only.)"
-        logger.warning(f"Vision tool: image capture failed: {e}")
 
     try:
         loop = asyncio.get_running_loop()
@@ -650,7 +646,6 @@ async def track_object(
             # Build a concise trajectory summary for the system prompt
             start_pos = full_trajectory[0]["pos"]
             end_pos = full_trajectory[-1]["pos"]
-            import math
             displacement = math.sqrt(
                 sum((end_pos[i] - start_pos[i]) ** 2 for i in range(3))
             )
@@ -723,8 +718,6 @@ async def render_figure_strip(
 
     Requires a recorded trajectory (use sim_record + sim_step first).
     """
-    import bisect
-    import base64
 
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
