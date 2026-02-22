@@ -217,3 +217,216 @@ async def analyze_scene(
         "image_sent": image_sent,
         "sim_time": float(d.time),
     }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Private helpers shared by analyze_scene and compare_scenes
+# ---------------------------------------------------------------------------
+
+def _render_slot_png(
+    mgr,
+    slot,
+    camera: str | None,
+    width: int,
+    height: int,
+) -> "bytes | None":
+    """Render *slot* to a PNG byte-string.  Returns None when rendering fails."""
+    try:
+        renderer = mgr.require_renderer(slot)
+        cam_id = resolve_camera(slot.model, camera)
+        update_scene(renderer, slot.data, camera_id=cam_id)
+        pixels = renderer.render()
+        img = Image.fromarray(pixels)
+        if img.width != width or img.height != height:
+            img = img.resize((width, height), Image.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning("_render_slot_png failed for slot %r: %s", getattr(slot, "name", "?"), e)
+        return None
+
+
+def _call_gemini_multi_image(
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    images: "list[bytes | None]",
+) -> str:
+    """Send multiple images + prompt to Gemini.  Returns response text.
+
+    Each image is preceded by a text label ("Image 1:", "Image 2:", …).
+    None entries are silently skipped (the label is still omitted).
+    """
+    client = genai.Client(api_key=api_key)
+
+    parts: list = []
+    image_index = 0
+    for img_bytes in images:
+        image_index += 1
+        if img_bytes is None:
+            continue
+        parts.append(genai_types.Part(text=f"Image {image_index}:"))
+        parts.append(
+            genai_types.Part(
+                inline_data=genai_types.Blob(data=img_bytes, mime_type="image/png")
+            )
+        )
+
+    parts.append(genai_types.Part(text=user_prompt))
+
+    response = client.models.generate_content(
+        model=model,
+        contents=[genai_types.Content(role="user", parts=parts)],
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.1,
+        ),
+    )
+    text = response.text
+    if text is None:
+        finish = getattr(response, "finish_reason", "unknown")
+        raise ValueError(f"Gemini returned no text (finish_reason={finish})")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# compare_scenes tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+@safe_tool
+async def compare_scenes(
+    ctx: Context,
+    prompt: str,
+    slot_a: str | None = None,
+    slot_b: str | None = None,
+    camera: str | None = None,
+    width: int = 640,
+    height: int = 480,
+) -> str:
+    """Compare two simulation scenes using Gemini vision.
+
+    Renders both scenes side-by-side and asks Gemini to analyze differences.
+    If slot_b is None, compares slot_a at current time vs after re-rendering
+    (useful for comparing same scene from different cameras).
+    If both are None, requires at least two loaded slots.
+
+    Requires GEMINI_API_KEY environment variable.
+
+    Args:
+        prompt: What to compare (e.g. "What changed?", "Which robot is more extended?").
+        slot_a: First simulation slot name (default: first available slot).
+        slot_b: Second simulation slot name (default: second available slot).
+        camera: Named camera for rendering both scenes.
+        width: Render width per image.
+        height: Render height per image.
+
+    Returns:
+        JSON: {"comparison": str, "model": str, "images_sent": int, "slots": [str, str]}
+    """
+    if not _GENAI_AVAILABLE:
+        return json.dumps({
+            "error": "google-genai not installed. Run: pip install 'mujoco-mcp-server[vision]'"
+        })
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return json.dumps({
+            "error": "GEMINI_API_KEY not set. Export it: export GEMINI_API_KEY=your_key"
+        })
+
+    model = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-pro")
+
+    mgr = ctx.request_context.lifespan_context.sim_manager
+
+    # ------------------------------------------------------------------
+    # Resolve slot names
+    # ------------------------------------------------------------------
+    if slot_a is None and slot_b is None:
+        all_slots = list(mgr.snapshot_slots().keys())
+        if len(all_slots) < 2:
+            return json.dumps({
+                "error": (
+                    f"compare_scenes needs at least 2 loaded slots, "
+                    f"but only {len(all_slots)} found: {all_slots}"
+                )
+            })
+        name_a, name_b = all_slots[0], all_slots[1]
+    elif slot_a is not None and slot_b is None:
+        return json.dumps({
+            "error": "slot_b must be provided when slot_a is specified. "
+                     "Pass both slot names, or omit both to auto-select."
+        })
+    elif slot_a is None and slot_b is not None:
+        return json.dumps({
+            "error": "slot_a must be provided when slot_b is specified. "
+                     "Pass both slot names, or omit both to auto-select."
+        })
+    else:
+        name_a, name_b = slot_a, slot_b  # type: ignore[assignment]
+
+    slot_obj_a = mgr.get(name_a)
+    slot_obj_b = mgr.get(name_b)
+
+    # ------------------------------------------------------------------
+    # Render each slot
+    # ------------------------------------------------------------------
+    png_bytes_a = _render_slot_png(mgr, slot_obj_a, camera, width, height)
+    png_bytes_b = _render_slot_png(mgr, slot_obj_b, camera, width, height)
+
+    # ------------------------------------------------------------------
+    # Build combined system prompt
+    # ------------------------------------------------------------------
+    prompt_a = _build_system_prompt(slot_obj_a.model, slot_obj_a.data)
+    prompt_b = _build_system_prompt(slot_obj_b.model, slot_obj_b.data)
+
+    system_prompt = "\n\n".join([
+        f"## Slot A — '{name_a}'",
+        prompt_a,
+        f"## Slot B — '{name_b}'",
+        prompt_b,
+        "## Task",
+        "You will receive two rendered images (Image 1 = Slot A, Image 2 = Slot B). "
+        "Compare them carefully and answer the user's question.",
+    ])
+
+    if png_bytes_a is None and png_bytes_b is None:
+        system_prompt += (
+            "\n\n*Note: Neither scene could be rendered — "
+            "comparison is based on metadata only.*"
+        )
+    elif png_bytes_a is None:
+        system_prompt += f"\n\n*Note: Image for Slot A ('{name_a}') unavailable — using metadata only.*"
+    elif png_bytes_b is None:
+        system_prompt += f"\n\n*Note: Image for Slot B ('{name_b}') unavailable — using metadata only.*"
+
+    # ------------------------------------------------------------------
+    # Call Gemini with both images
+    # ------------------------------------------------------------------
+    try:
+        loop = asyncio.get_running_loop()
+        analysis = await loop.run_in_executor(
+            None,
+            lambda: _call_gemini_multi_image(
+                api_key=api_key,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=prompt,
+                images=[png_bytes_a, png_bytes_b],
+            ),
+        )
+    except Exception as e:
+        return json.dumps({"error": f"{type(e).__name__}: {e}"})
+
+    images_sent = sum(1 for b in [png_bytes_a, png_bytes_b] if b is not None)
+    return json.dumps(
+        {
+            "comparison": analysis,
+            "model": model,
+            "images_sent": images_sent,
+            "slots": [name_a, name_b],
+        },
+        ensure_ascii=False,
+    )
