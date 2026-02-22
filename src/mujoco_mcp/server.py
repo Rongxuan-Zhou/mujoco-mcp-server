@@ -62,7 +62,7 @@ _set_lifespan(app_lifespan)
 # Register all tool modules (importing them causes @mcp.tool() decorators to fire)
 from .tools import simulation, rendering, meta  # noqa: E402, F401
 from .tools import analysis, model, batch, export, workflows, viewer  # noqa: E402, F401
-from .tools import spatial, menagerie, control, sensor_fusion, coordination, rl_env  # noqa: E402, F401
+from .tools import spatial, menagerie, control, sensor_fusion, coordination, rl_env, vision  # noqa: E402, F401
 from . import resources, prompts  # noqa: E402, F401
 
 # Keep backward-compatible alias
