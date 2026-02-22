@@ -12,6 +12,7 @@ dependencies = [
     "packaging>=21.0",
     "scipy>=1.9",
     "gymnasium>=0.29",
+    "google-genai>=1.0",
 ]
 
 [project.scripts]
