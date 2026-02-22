@@ -57,7 +57,7 @@ def test_analyze_scene_returns_json_with_analysis(monkeypatch):
     assert "analysis" in data
     assert data["analysis"] == "The robot arm is fully extended upward."
     assert data["image_sent"] is True
-    assert data["model"] == "gemini-2.5-pro-latest"
+    assert data["model"] == "gemini-2.5-pro"
     mock_client.models.generate_content.assert_called_once()
 
 

@@ -71,7 +71,7 @@ async def analyze_scene(
     returns a natural language analysis.
 
     Requires GEMINI_API_KEY environment variable.
-    Optional: GEMINI_VISION_MODEL (default: gemini-2.5-pro-latest).
+    Optional: GEMINI_VISION_MODEL (default: gemini-2.5-pro).
 
     Args:
         prompt: Natural language question about the scene.
@@ -92,7 +92,7 @@ async def analyze_scene(
             "error": "GEMINI_API_KEY not set. Export it: export GEMINI_API_KEY=your_key"
         })
 
-    model = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-pro-latest")
+    model = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-pro")
 
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
