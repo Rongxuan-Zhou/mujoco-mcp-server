@@ -698,3 +698,103 @@ async def track_object(
         },
         ensure_ascii=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# render_figure_strip tool
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@safe_tool
+async def render_figure_strip(
+    ctx: Context,
+    timestamps: list[float],
+    sim_name: str | None = None,
+    camera: str | None = None,
+) -> list:
+    """Render frames at specified timestamps from a recorded trajectory.
+
+    Sets simulation state to the nearest recorded frame for each timestamp
+    and renders a snapshot. Useful for generating paper figures.
+
+    Requires a recorded trajectory (use sim_record + sim_step first).
+    """
+    import bisect
+    import base64
+    from mcp.types import TextContent, ImageContent
+
+    mgr = ctx.request_context.lifespan_context.sim_manager
+    slot = mgr.get(sim_name)
+    m, d = slot.model, slot.data
+
+    traj = slot.trajectory
+    if not traj:
+        return [TextContent(
+            type="text",
+            text=_make_error("NO_TRAJECTORY",
+                             "No trajectory recorded. Use sim_record(action='start') then sim_step."),
+        )]
+
+    # Save current state to restore afterwards
+    saved_qpos = d.qpos.copy()
+    saved_qvel = d.qvel.copy()
+    saved_time = float(d.time)
+
+    traj_times = [frame["t"] for frame in traj]
+    timestamps_rendered = []
+    nearest_frames = []
+    images: list = []
+
+    for ts in timestamps:
+        idx = bisect.bisect_left(traj_times, ts)
+        if idx == 0:
+            nearest_idx = 0
+        elif idx >= len(traj):
+            nearest_idx = len(traj) - 1
+        else:
+            before = traj_times[idx - 1]
+            after = traj_times[idx]
+            nearest_idx = idx - 1 if abs(ts - before) <= abs(ts - after) else idx
+
+        frame = traj[nearest_idx]
+        actual_t = frame["t"]
+
+        qpos = frame["qpos"]
+        qvel = frame["qvel"]
+        if len(qpos) == m.nq:
+            d.qpos[:] = qpos
+        if len(qvel) == m.nv:
+            d.qvel[:] = qvel
+        d.time = actual_t
+        mujoco.mj_forward(m, d)
+
+        result = _render_slot_image(mgr, slot, camera, width=640, height=480)
+        if result is not None:
+            img_bytes, mime_type = result
+            images.append(ImageContent(
+                type="image",
+                data=base64.b64encode(img_bytes).decode(),
+                mimeType=mime_type,
+            ))
+
+        timestamps_rendered.append(ts)
+        nearest_frames.append(actual_t)
+
+    # Restore original state
+    d.qpos[:] = saved_qpos
+    d.qvel[:] = saved_qvel
+    d.time = saved_time
+    mujoco.mj_forward(m, d)
+
+    summary = TextContent(
+        type="text",
+        text=json.dumps({
+            "timestamps_requested": timestamps,
+            "timestamps_rendered": timestamps_rendered,
+            "nearest_frames": nearest_frames,
+            "images_rendered": len(images),
+        }, ensure_ascii=False),
+    )
+
+    return [summary] + images

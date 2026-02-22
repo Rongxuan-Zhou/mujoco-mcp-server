@@ -388,3 +388,71 @@ def test_detect_intent_comparison_keywords():
 def test_detect_intent_general_fallback():
     assert _detect_intent("Tell me about the scene.") == "general"
     assert _detect_intent("Describe what you see.") == "general"
+
+
+# ── Task 4 tests ──────────────────────────────────────────────────────────────
+
+
+def _make_ctx_with_trajectory():
+    """Build a mock context whose slot has a recorded trajectory."""
+    import asyncio
+    import mujoco
+    model = mujoco.MjModel.from_xml_string(
+        '<mujoco><worldbody>'
+        '<body><joint type="slide"/><geom type="sphere" size=".1"/></body>'
+        '</worldbody></mujoco>'
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    from mujoco_mcp.sim_manager import SimSlot
+    slot = SimSlot(name="traj_test", model=model, data=data)
+    # Add fake trajectory frames
+    slot.trajectory = [
+        {"t": float(i) * 0.01, "qpos": list(data.qpos), "qvel": list(data.qvel)}
+        for i in range(10)
+    ]
+
+    mgr = MagicMock()
+    mgr.get.return_value = slot
+    mgr.require_renderer.side_effect = RuntimeError("no GL")
+    ctx = MagicMock()
+    ctx.request_context.lifespan_context.sim_manager = mgr
+    return ctx, slot
+
+
+def test_render_figure_strip_no_trajectory():
+    """Empty trajectory returns error TextContent."""
+    import asyncio
+    import mujoco
+    from mujoco_mcp.sim_manager import SimSlot
+    model = mujoco.MjModel.from_xml_string('<mujoco><worldbody></worldbody></mujoco>')
+    data = mujoco.MjData(model)
+    slot = SimSlot(name="empty", model=model, data=data)
+    slot.trajectory = []
+    mgr = MagicMock()
+    mgr.get.return_value = slot
+    ctx = MagicMock()
+    ctx.request_context.lifespan_context.sim_manager = mgr
+
+    from mujoco_mcp.tools.vision import render_figure_strip
+    result = asyncio.run(render_figure_strip(ctx, timestamps=[0.0, 0.05]))
+    # result is list; first element is TextContent with error
+    assert len(result) >= 1
+    text_content = result[0]
+    data_out = json.loads(text_content.text)
+    assert "error" in data_out
+    assert data_out["error"] == "NO_TRAJECTORY"
+
+
+def test_render_figure_strip_restores_state():
+    """After rendering, qpos must be restored to its original value."""
+    import asyncio
+    import numpy as np
+    ctx, slot = _make_ctx_with_trajectory()
+    original_qpos = slot.data.qpos.copy()
+
+    from mujoco_mcp.tools.vision import render_figure_strip
+    asyncio.run(render_figure_strip(ctx, timestamps=[0.02, 0.07]))
+
+    np.testing.assert_array_almost_equal(slot.data.qpos, original_qpos)
