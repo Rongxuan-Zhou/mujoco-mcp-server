@@ -218,3 +218,41 @@ def test_compare_scenes_only_slot_a_given(monkeypatch):
     data = json.loads(result)
     assert "error" in data
     assert "slot_b" in data["error"]
+
+
+# ---------------------------------------------------------------------------
+# track_object tests
+# ---------------------------------------------------------------------------
+
+def test_track_object_no_prompt_returns_trajectory():
+    """track_object without a prompt returns trajectory data and no analysis."""
+    import asyncio
+    from mujoco_mcp.tools.vision import track_object
+
+    ctx = _make_ctx(has_renderer=True)
+    result = asyncio.run(track_object(ctx, body_name="box", n_steps=10, capture_every=0))
+    data = json.loads(result)
+
+    assert data["body"] == "box"
+    assert data["n_steps"] == 10
+    assert isinstance(data["trajectory"], list)
+    assert len(data["trajectory"]) == 10
+    assert all("t" in pt and "pos" in pt for pt in data["trajectory"])
+    assert len(data["trajectory"][0]["pos"]) == 3
+    assert data["keyframes_captured"] == 0
+    assert data["analysis"] is None
+    assert data["model"] is None
+
+
+def test_track_object_unknown_body_returns_error():
+    """track_object with a nonexistent body name returns a JSON error."""
+    import asyncio
+    from mujoco_mcp.tools.vision import track_object
+
+    ctx = _make_ctx(has_renderer=False)
+    result = asyncio.run(track_object(ctx, body_name="does_not_exist", n_steps=5))
+    data = json.loads(result)
+
+    assert "error" in data
+    assert "does_not_exist" in data["error"]
+    assert "Available bodies" in data["error"]

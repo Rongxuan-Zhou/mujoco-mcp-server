@@ -430,3 +430,164 @@ async def compare_scenes(
         },
         ensure_ascii=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# track_object tool
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+@safe_tool
+async def track_object(
+    ctx: Context,
+    body_name: str,
+    n_steps: int = 200,
+    capture_every: int = 50,
+    prompt: str | None = None,
+    sim_name: str | None = None,
+    camera: str | None = None,
+    width: int = 320,
+    height: int = 240,
+) -> str:
+    """Track a body's trajectory and analyze its motion using Gemini vision.
+
+    Steps the simulation forward, records the body's world position at each step,
+    and captures rendered keyframes at intervals. Optionally sends keyframes to
+    Gemini for motion analysis.
+
+    Args:
+        body_name: Name of the body to track (use scene_map to find names).
+        n_steps: Number of simulation steps to run (max 5000).
+        capture_every: Render a keyframe every N steps (0 = no visual capture).
+        prompt: Optional question for Gemini vision analysis of the trajectory.
+                If None or no API key, returns trajectory data only.
+        sim_name: Simulation slot name.
+        camera: Named camera for keyframes.
+        width: Keyframe render width (smaller = faster).
+        height: Keyframe render height.
+
+    Returns:
+        JSON: {
+            "body": str,
+            "n_steps": int,
+            "trajectory": [{"t": float, "pos": [x, y, z]}],
+            "keyframes_captured": int,
+            "analysis": str | null,
+            "model": str | null,
+        }
+    """
+    # ------------------------------------------------------------------
+    # Clamp n_steps
+    # ------------------------------------------------------------------
+    n_steps = min(n_steps, 5000)
+
+    mgr = ctx.request_context.lifespan_context.sim_manager
+    slot = mgr.get(sim_name)
+    m = slot.model
+    d = slot.data
+
+    # ------------------------------------------------------------------
+    # Resolve body_id
+    # ------------------------------------------------------------------
+    body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body_id == -1:
+        available = [
+            mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, i) or f"<body:{i}>"
+            for i in range(m.nbody)
+        ]
+        return json.dumps({
+            "error": f"Body '{body_name}' not found. Available bodies: {available}"
+        })
+
+    # ------------------------------------------------------------------
+    # Step simulation, record trajectory, capture keyframes
+    # ------------------------------------------------------------------
+    full_trajectory: list[dict] = []
+    keyframe_images: list[bytes | None] = []
+
+    for step in range(n_steps):
+        mujoco.mj_step(m, d)
+        full_trajectory.append({
+            "t": float(d.time),
+            "pos": d.xpos[body_id].tolist(),
+        })
+        if capture_every > 0 and step % capture_every == 0:
+            png = _render_slot_png(mgr, slot, camera, width, height)
+            keyframe_images.append(png)
+
+    # ------------------------------------------------------------------
+    # Downsample trajectory if too large (keep at most 1000 points)
+    # ------------------------------------------------------------------
+    if len(full_trajectory) > 1000:
+        stride = len(full_trajectory) // 1000 + 1
+        trajectory = full_trajectory[::stride]
+    else:
+        trajectory = full_trajectory
+
+    keyframes_captured = sum(1 for img in keyframe_images if img is not None)
+
+    # ------------------------------------------------------------------
+    # Optional Gemini analysis
+    # ------------------------------------------------------------------
+    analysis: str | None = None
+    gemini_model: str | None = None
+
+    if prompt is not None and keyframe_images:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        if api_key and _GENAI_AVAILABLE:
+            gemini_model = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.5-pro")
+
+            # Build a concise trajectory summary for the system prompt
+            start_pos = full_trajectory[0]["pos"]
+            end_pos = full_trajectory[-1]["pos"]
+            import math
+            displacement = math.sqrt(
+                sum((end_pos[i] - start_pos[i]) ** 2 for i in range(3))
+            )
+            total_time = full_trajectory[-1]["t"] - full_trajectory[0]["t"]
+
+            system_prompt = "\n".join([
+                "You are an expert robotics simulation analyst examining keyframes "
+                "of a MuJoCo physics simulation.",
+                "",
+                f"## Tracked Body: '{body_name}'",
+                f"Steps run: {n_steps} | Total simulated time: {total_time:.4f}s",
+                f"Start position: ({start_pos[0]:.3f}, {start_pos[1]:.3f}, {start_pos[2]:.3f}) m",
+                f"End position:   ({end_pos[0]:.3f}, {end_pos[1]:.3f}, {end_pos[2]:.3f}) m",
+                f"Displacement:   {displacement:.4f} m",
+                "",
+                f"Keyframes sent: {keyframes_captured} "
+                f"(one every {capture_every} steps)",
+                "",
+                "## Response Format",
+                "Describe the motion you observe across the keyframes. "
+                "Reference positions/orientations where relevant. "
+                "Answer the user's question precisely using metric units.",
+            ])
+
+            try:
+                loop = asyncio.get_running_loop()
+                analysis = await loop.run_in_executor(
+                    None,
+                    lambda: _call_gemini_multi_image(
+                        api_key=api_key,
+                        model=gemini_model,
+                        system_prompt=system_prompt,
+                        user_prompt=prompt,
+                        images=keyframe_images,
+                    ),
+                )
+            except Exception as e:
+                analysis = f"Gemini error: {type(e).__name__}: {e}"
+
+    return json.dumps(
+        {
+            "body": body_name,
+            "n_steps": n_steps,
+            "trajectory": trajectory,
+            "keyframes_captured": keyframes_captured,
+            "analysis": analysis,
+            "model": gemini_model,
+        },
+        ensure_ascii=False,
+    )
