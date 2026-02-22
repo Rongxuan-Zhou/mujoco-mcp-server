@@ -39,6 +39,7 @@ def _make_ctx(has_renderer=True):
 
 
 def test_analyze_scene_returns_json_with_analysis(monkeypatch):
+    """Happy path: Gemini returns text, tool wraps it in JSON."""
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
 
     mock_response = MagicMock()
@@ -47,15 +48,16 @@ def test_analyze_scene_returns_json_with_analysis(monkeypatch):
     mock_client.models.generate_content.return_value = mock_response
 
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
-        from mujoco_mcp.tools.vision import _call_gemini
-        result = _call_gemini(
-            api_key="fake-key",
-            model="gemini-2.5-pro-latest",
-            system_prompt="You are a robotics analyst.",
-            user_prompt="Where is the arm?",
-            png_bytes=b"\x89PNG\r\n",
-        )
-    assert result == "The robot arm is fully extended upward."
+        import asyncio
+        from mujoco_mcp.tools.vision import analyze_scene
+        ctx = _make_ctx(has_renderer=True)
+        result = asyncio.run(analyze_scene(ctx, prompt="Where is the arm?"))
+
+    data = json.loads(result)
+    assert "analysis" in data
+    assert data["analysis"] == "The robot arm is fully extended upward."
+    assert data["image_sent"] is True
+    assert data["model"] == "gemini-2.5-pro-latest"
     mock_client.models.generate_content.assert_called_once()
 
 
