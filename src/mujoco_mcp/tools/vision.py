@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import threading
+import time
 from io import BytesIO
 
 import mujoco
@@ -16,7 +18,20 @@ from . import safe_tool
 
 logger = logging.getLogger(__name__)
 
-import time
+# ── Optional Gemini dependency ────────────────────────────────────────────────
+
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    _GENAI_AVAILABLE = True
+    try:
+        from google.api_core import exceptions as _gapi_exc
+        _RATE_LIMIT_EXC = (_gapi_exc.ResourceExhausted, _gapi_exc.TooManyRequests)
+    except ImportError:
+        _RATE_LIMIT_EXC = ()
+except ImportError:
+    _GENAI_AVAILABLE = False
+    _RATE_LIMIT_EXC = ()
 
 # ── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -28,13 +43,15 @@ def _make_error(code: str, message: str, **kwargs) -> str:
 # ── Gemini client cache ───────────────────────────────────────────────────────
 
 _gemini_client_cache: dict = {}
+_gemini_client_lock = threading.Lock()
 
 
 def _get_client(api_key: str):
     """Return a cached Gemini client for *api_key*."""
-    if api_key not in _gemini_client_cache:
-        _gemini_client_cache[api_key] = genai.Client(api_key=api_key)
-    return _gemini_client_cache[api_key]
+    with _gemini_client_lock:
+        if api_key not in _gemini_client_cache:
+            _gemini_client_cache[api_key] = genai.Client(api_key=api_key)
+        return _gemini_client_cache[api_key]
 
 
 # ── Retry wrapper ─────────────────────────────────────────────────────────────
@@ -45,19 +62,15 @@ def _call_with_retry(fn, max_retries: int = 3, base_delay: float = 2.0):
         try:
             return fn()
         except Exception as e:
-            is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+            is_rate_limit = (
+                isinstance(e, _RATE_LIMIT_EXC)
+                or "429" in str(e)
+                or "RESOURCE_EXHAUSTED" in str(e)
+            )
             if is_rate_limit and attempt < max_retries - 1:
                 time.sleep(base_delay * (2 ** attempt))
                 continue
             raise
-
-
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    _GENAI_AVAILABLE = True
-except ImportError:
-    _GENAI_AVAILABLE = False
 
 
 def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData") -> str:

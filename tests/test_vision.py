@@ -3,6 +3,15 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 
+import mujoco_mcp.tools.vision as _vision_mod
+
+
+@pytest.fixture(autouse=True)
+def _clear_gemini_cache():
+    _vision_mod._gemini_client_cache.clear()
+    yield
+    _vision_mod._gemini_client_cache.clear()
+
 
 def _make_ctx(has_renderer=True):
     import numpy as np
@@ -47,11 +56,9 @@ def test_analyze_scene_returns_json_with_analysis(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
-    import mujoco_mcp.tools.vision as vision_mod
+    import asyncio
+    from mujoco_mcp.tools.vision import analyze_scene
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
-        vision_mod._gemini_client_cache.clear()
-        import asyncio
-        from mujoco_mcp.tools.vision import analyze_scene
         ctx = _make_ctx(has_renderer=True)
         result = asyncio.run(analyze_scene(ctx, prompt="Where is the arm?"))
 
@@ -84,11 +91,9 @@ def test_analyze_scene_no_renderer_fallback(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
-    import mujoco_mcp.tools.vision as vision_mod
+    import asyncio
+    from mujoco_mcp.tools.vision import analyze_scene
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
-        vision_mod._gemini_client_cache.clear()
-        import asyncio
-        from mujoco_mcp.tools.vision import analyze_scene
         ctx = _make_ctx(has_renderer=False)
         result = asyncio.run(analyze_scene(ctx, prompt="describe"))
 
@@ -103,11 +108,9 @@ def test_analyze_scene_gemini_error_handled(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.side_effect = Exception("API quota exceeded")
 
-    import mujoco_mcp.tools.vision as vision_mod
+    import asyncio
+    from mujoco_mcp.tools.vision import analyze_scene
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
-        vision_mod._gemini_client_cache.clear()
-        import asyncio
-        from mujoco_mcp.tools.vision import analyze_scene
         ctx = _make_ctx()
         result = asyncio.run(analyze_scene(ctx, prompt="describe"))
 
@@ -169,11 +172,9 @@ def test_compare_scenes_happy_path(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
-    import mujoco_mcp.tools.vision as vision_mod
+    import asyncio
+    from mujoco_mcp.tools.vision import compare_scenes
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
-        vision_mod._gemini_client_cache.clear()
-        import asyncio
-        from mujoco_mcp.tools.vision import compare_scenes
         ctx = _make_ctx_two_slots(has_renderer=True)
         result = asyncio.run(compare_scenes(ctx, prompt="What changed?", slot_a="alpha", slot_b="beta"))
 
@@ -194,11 +195,9 @@ def test_compare_scenes_auto_slot_selection(monkeypatch):
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
 
-    import mujoco_mcp.tools.vision as vision_mod
+    import asyncio
+    from mujoco_mcp.tools.vision import compare_scenes
     with patch("mujoco_mcp.tools.vision.genai.Client", return_value=mock_client):
-        vision_mod._gemini_client_cache.clear()
-        import asyncio
-        from mujoco_mcp.tools.vision import compare_scenes
         ctx = _make_ctx_two_slots(has_renderer=True)
         result = asyncio.run(compare_scenes(ctx, prompt="Compare"))
 
