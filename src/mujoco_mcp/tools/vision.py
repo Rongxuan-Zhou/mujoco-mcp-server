@@ -137,7 +137,7 @@ async def analyze_scene(
         system_prompt += "\n\n(No image available — answer based on metadata only.)"
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         analysis = await loop.run_in_executor(None, lambda: _call_gemini(
             api_key=api_key,
             model=model,
