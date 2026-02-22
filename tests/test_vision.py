@@ -233,6 +233,47 @@ def test_compare_scenes_only_slot_a_given(monkeypatch):
     assert "slot_b" in data["message"]
 
 
+def test_compare_scenes_only_slot_b_given(monkeypatch):
+    """compare_scenes must reject when only slot_b is supplied."""
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    import asyncio
+    from mujoco_mcp.tools.vision import compare_scenes
+    ctx = _make_ctx_two_slots()
+    result = asyncio.run(compare_scenes(ctx, prompt="compare", slot_b="beta"))
+    data = json.loads(result)
+    assert "error" in data
+    assert data["error"] == "INVALID_ARGS"
+    assert "slot_a" in data["message"]
+
+
+def test_compare_scenes_auto_too_few_slots(monkeypatch):
+    """compare_scenes auto-select must fail when fewer than 2 slots are loaded."""
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+
+    import asyncio
+    import mujoco
+    from mujoco_mcp.sim_manager import SimSlot
+    from mujoco_mcp.tools.vision import compare_scenes
+
+    model = mujoco.MjModel.from_xml_string(
+        "<mujoco><worldbody><body name='box'><geom type='box' size='.1 .1 .1'/></body></worldbody></mujoco>"
+    )
+    data = mujoco.MjData(model)
+    slot_only = SimSlot(name="only", model=model, data=data)
+
+    sm = MagicMock()
+    sm.snapshot_slots.return_value = {"only": slot_only}
+    ctx = MagicMock()
+    ctx.request_context.lifespan_context.sim_manager = sm
+
+    result = asyncio.run(compare_scenes(ctx, prompt="compare"))
+    data_out = json.loads(result)
+    assert "error" in data_out
+    assert data_out["error"] == "INVALID_ARGS"
+    assert "2" in data_out["message"]
+
+
 # ---------------------------------------------------------------------------
 # track_object tests
 # ---------------------------------------------------------------------------
@@ -344,7 +385,7 @@ def test_render_slot_image_small_uses_png(monkeypatch):
 
 
 def test_render_slot_image_large_uses_jpeg(monkeypatch):
-    """Images > 512x512 pixels should use JPEG."""
+    """Images with pixel count > 262144 use JPEG (512×512=262144 still PNG, 640×640=409600 uses JPEG)."""
     monkeypatch.setenv("MUJOCO_MCP_VISION_JPEG_QUALITY", "85")
     import numpy as np
     from unittest.mock import MagicMock
