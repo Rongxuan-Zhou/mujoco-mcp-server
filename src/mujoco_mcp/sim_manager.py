@@ -23,6 +23,9 @@ class SimSlot:
     trajectory: list = field(default_factory=list)
     recording: bool = False
     passive_viewer: Optional[object] = None  # mujoco.viewer Handle (launch_passive)
+    controller: Optional[object] = None       # Phase 4c: RobotController
+    sensor_manager: Optional[object] = None   # Phase 4d: SensorManager
+    rl_env: Optional[object] = None           # Phase 4f: MuJoCoRLEnvironment
 
 
 class SimManager:
@@ -30,6 +33,7 @@ class SimManager:
                  render_width: int = 640, render_height: int = 480):
         self.slots: dict[str, SimSlot] = {}
         self.active_slot: Optional[str] = None
+        self.coordinator: Optional[object] = None  # Phase 4e: MultiRobotCoordinator
         self.render_width = render_width
         self.render_height = render_height
         self._rendering_enabled = enable_rendering
