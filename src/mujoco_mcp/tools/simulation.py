@@ -44,14 +44,14 @@ async def sim_step(
     While recording is active, each step appends to the trajectory buffer.
     """
     if not 1 <= n_steps <= MAX_SIM_STEPS:
-        return json.dumps({"error": f"n_steps must be 1–{MAX_SIM_STEPS}"})
+        raise ValueError(f"n_steps must be 1–{MAX_SIM_STEPS}")
 
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     m, d = slot.model, slot.data
 
     if ctrl is not None:
         if len(ctrl) != m.nu:
-            return json.dumps({"error": f"ctrl len {len(ctrl)} != nu {m.nu}"})
+            raise ValueError(f"ctrl len {len(ctrl)} != nu {m.nu}")
         d.ctrl[:] = np.array(ctrl, dtype=np.float64)
 
     for step in range(n_steps):
@@ -209,7 +209,7 @@ async def sim_record(
         slot.trajectory.clear()
         slot.recording = False
     else:
-        return json.dumps({"error": "action must be 'start', 'stop', or 'clear'"})
+        raise ValueError("action must be 'start', 'stop', or 'clear'")
     return json.dumps({
         "recording": slot.recording,
         "frames": len(slot.trajectory),
