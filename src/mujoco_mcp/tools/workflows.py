@@ -1,5 +1,6 @@
 """Workflow tools (tools 19–23): high-level research-oriented compositions of atomic tools."""
 
+import asyncio
 import base64
 import json
 import mujoco
@@ -11,9 +12,8 @@ from mcp.server.fastmcp import Context
 
 from .._registry import mcp
 from ..compat import resolve_camera, update_scene, ensure_energy, restore_energy, contact_geoms
+from ..constants import MAX_SIM_STEPS, ASYNC_YIELD_INTERVAL
 from . import safe_tool
-
-MAX_STEPS = 100_000
 
 
 def _encode_png(pixels: np.ndarray) -> str:
@@ -67,7 +67,7 @@ async def run_and_analyze(
     slot = mgr.get(sim_name)
     m, d = slot.model, slot.data
     track = track or ["energy", "contact_count"]
-    n_steps = min(n_steps, MAX_STEPS)
+    n_steps = min(n_steps, MAX_SIM_STEPS)
 
     if ctrl is not None:
         if len(ctrl) != m.nu:
@@ -86,6 +86,8 @@ async def run_and_analyze(
 
     for step in range(n_steps):
         mujoco.mj_step(m, d)
+        if (step + 1) % ASYNC_YIELD_INTERVAL == 0:
+            await asyncio.sleep(0)  # yield to event loop every 1000 steps
 
         row: dict = {"t": round(d.time, 6)}
         for t in track:
@@ -162,7 +164,7 @@ async def debug_contacts(
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
     m, d = slot.model, slot.data
-    n_steps = min(n_steps, MAX_STEPS)
+    n_steps = min(n_steps, MAX_SIM_STEPS)
 
     if ctrl is not None:
         if len(ctrl) != m.nu:
@@ -181,8 +183,10 @@ async def debug_contacts(
     contact_opt = mujoco.MjvOption()
     contact_opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = True
 
-    for _ in range(n_steps):
+    for _step_i, _ in enumerate(range(n_steps)):
         mujoco.mj_step(m, d)
+        if (_step_i + 1) % ASYNC_YIELD_INTERVAL == 0:
+            await asyncio.sleep(0)  # yield to event loop every 1000 steps
         cur_pairs: set[tuple] = set()
         step_forces: dict = {}
         should_capture = False
@@ -274,7 +278,8 @@ async def evaluate_trajectory(
     m, d = slot.model, slot.data
 
     if trajectory_csv:
-        df = pd.read_csv(trajectory_csv)
+        loop = asyncio.get_running_loop()
+        df = await loop.run_in_executor(None, pd.read_csv, trajectory_csv)
         frames = df.to_dict("records")
     elif trajectory:
         frames = trajectory
@@ -298,6 +303,8 @@ async def evaluate_trajectory(
     prev_E: float | None = None
 
     for i, frame in enumerate(frames):
+        if (i + 1) % ASYNC_YIELD_INTERVAL == 0:
+            await asyncio.sleep(0)  # yield to event loop every 1000 frames
         # --- Set state ---
         if "qpos" in frame and isinstance(frame["qpos"], list):
             d.qpos[:] = np.array(frame["qpos"], dtype=np.float64)
@@ -450,52 +457,3 @@ async def compare_trajectories(
                 keyframes.append(_snapshot(sb.renderer, sb.data, cam_id_b))
 
     return [TextContent(type="text", text=json.dumps(report))] + keyframes
-
-
-# ---------------------------------------------------------------------------
-# Tool 23: render_figure_strip
-# ---------------------------------------------------------------------------
-
-@mcp.tool()
-@safe_tool
-async def render_figure_strip(
-    ctx: Context,
-    timestamps: list[float],
-    camera: str | None = None,
-    sim_name: str | None = None,
-) -> list:
-    """Render frames at specified timestamps from a recorded trajectory.
-
-    Sets simulation state to the nearest recorded frame for each timestamp
-    and renders a snapshot. Useful for generating paper figures.
-
-    Requires a recorded trajectory (use sim_record + sim_step first).
-    """
-    mgr = ctx.request_context.lifespan_context.sim_manager
-    slot = mgr.get(sim_name)
-
-    if not slot.trajectory:
-        return [TextContent(type="text",
-            text=json.dumps({"error": "No recorded trajectory. Use sim_record first."}))]
-    if not (mgr.can_render and slot.renderer):
-        return [TextContent(type="text",
-            text=json.dumps({"error": "Rendering unavailable. Run server_diagnostics."}))]
-
-    traj = slot.trajectory
-    traj_times = np.array([f["t"] for f in traj])
-    cam_id = resolve_camera(slot.model, camera)
-    m, d = slot.model, slot.data
-
-    keyframes: list[ImageContent] = []
-    frame_info: list[dict] = []
-
-    for ts in timestamps:
-        idx = int(np.argmin(np.abs(traj_times - ts)))
-        frame = traj[idx]
-        d.qpos[:] = np.array(frame["qpos"])
-        d.qvel[:] = np.array(frame["qvel"])
-        mujoco.mj_forward(m, d)
-        keyframes.append(_snapshot(slot.renderer, d, cam_id))
-        frame_info.append({"requested_t": ts, "actual_t": frame["t"], "frame_idx": idx})
-
-    return [TextContent(type="text", text=json.dumps({"frames": frame_info}))] + keyframes
