@@ -1,15 +1,15 @@
 """Atomic simulation tools (tools 1–8): load, step, forward, reset, get/set state, record, list."""
 
+import asyncio
 import json
 import mujoco
 import numpy as np
 from mcp.server.fastmcp import Context
 
+from ..constants import MAX_SIM_STEPS, ASYNC_YIELD_INTERVAL
 from .._registry import mcp
 from ..compat import list_named
 from . import safe_tool, _viewer_sync
-
-MAX_STEPS = 100_000
 
 
 @mcp.tool()
@@ -43,8 +43,8 @@ async def sim_step(
     Optionally set control vector before stepping. Returns state at final step.
     While recording is active, each step appends to the trajectory buffer.
     """
-    if not 1 <= n_steps <= MAX_STEPS:
-        return json.dumps({"error": f"n_steps must be 1–{MAX_STEPS}"})
+    if not 1 <= n_steps <= MAX_SIM_STEPS:
+        return json.dumps({"error": f"n_steps must be 1–{MAX_SIM_STEPS}"})
 
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     m, d = slot.model, slot.data
@@ -54,7 +54,7 @@ async def sim_step(
             return json.dumps({"error": f"ctrl len {len(ctrl)} != nu {m.nu}"})
         d.ctrl[:] = np.array(ctrl, dtype=np.float64)
 
-    for _ in range(n_steps):
+    for step in range(n_steps):
         mujoco.mj_step(m, d)
         if slot.recording:
             slot.trajectory.append({
@@ -62,6 +62,8 @@ async def sim_step(
                 "qpos": d.qpos.copy().tolist(),
                 "qvel": d.qvel.copy().tolist(),
             })
+        if (step + 1) % ASYNC_YIELD_INTERVAL == 0:
+            await asyncio.sleep(0)  # yield to event loop
 
     _viewer_sync(slot)
     return json.dumps({
