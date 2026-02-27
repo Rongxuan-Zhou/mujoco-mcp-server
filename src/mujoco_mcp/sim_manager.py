@@ -76,6 +76,16 @@ class SimManager:
                     s.passive_viewer.close()
                 except Exception:
                     pass
+            if s.sensor_manager is not None:
+                try:
+                    s.sensor_manager.stop_sensing()
+                except Exception:
+                    pass
+            if s.rl_env is not None:
+                try:
+                    s.rl_env.close()
+                except Exception:
+                    pass
         if self._gl_context:
             try:
                 self._gl_context.free()
@@ -138,11 +148,34 @@ class SimManager:
                     old.passive_viewer.close()
                 except Exception:
                     pass
+            if old.sensor_manager is not None:
+                try:
+                    old.sensor_manager.stop_sensing()
+                except Exception:
+                    pass
+            if old.rl_env is not None:
+                try:
+                    old.rl_env.close()
+                except Exception:
+                    pass
 
         return self._summary(slot)
 
     def get(self, name: str | None = None) -> SimSlot:
-        """Retrieve slot by name (or active slot if name is None). Thread-safe."""
+        """Retrieve slot by name (or active slot if name is None). Thread-safe.
+
+        Args:
+            name: Slot name to retrieve. ``None`` returns the most recently
+                  loaded slot (active_slot). Use explicit names when working
+                  with multiple parallel simulations.
+
+        Returns:
+            The ``SimSlot`` for the requested name.
+
+        Raises:
+            ValueError: If no simulation has been loaded yet (active_slot is
+                None) or the named slot does not exist.
+        """
         with self._lock:
             target = name or self.active_slot
             if target is None:

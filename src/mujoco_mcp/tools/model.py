@@ -110,8 +110,8 @@ async def reload_from_xml(
     prefer modify_model — it is instant and preserves simulation state.
     """
     mgr = ctx.request_context.lifespan_context.sim_manager
-    name = sim_name or mgr.active_slot or "default"
-    summary = mgr.load(name, xml_string=xml_string)
+    slot = mgr.get(sim_name)          # None → active_slot，与其他工具一致
+    summary = mgr.load(slot.name, xml_string=xml_string)
     # Viewer is invalidated on full reload (new model/data pointers).
     # Inform the caller so they can call viewer_open again if needed.
     summary["viewer_note"] = "Viewer closed — call viewer_open() to reopen with the new model."
