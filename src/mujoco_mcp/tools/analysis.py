@@ -22,6 +22,16 @@ async def analyze_contacts(
 
     Returns up to max_contacts entries sorted by contact index.
     Call sim_forward first if state was recently changed.
+
+    Args:
+        max_contacts: Maximum number of contacts to return (default 20).
+        sim_name: Slot name (default slot if None).
+
+    Returns:
+        JSON: {"n_contacts": int,
+               "contacts": [{"geom1": str, "geom2": str,
+                              "pos": [x,y,z], "dist": float,
+                              "normal_force": float, ...}]}
     """
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     m, d = slot.model, slot.data
@@ -174,6 +184,13 @@ async def read_sensors(
     """Read current sensor values by name, or all sensors if no names given.
 
     Returns a dict mapping sensor name → list of values (dim ≥ 1).
+
+    Args:
+        sensor_names: List of sensor names to read. ``None`` reads all sensors.
+        sim_name: Slot name (default slot if None).
+
+    Returns:
+        JSON: {sensor_name: [float, ...], ...}
     """
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     m, d = slot.model, slot.data
@@ -204,6 +221,13 @@ async def analyze_energy(ctx: Context, sim_name: str | None = None) -> str:
     Automatically enables the mjENBL_ENERGY flag for the duration of the call
     if not already set (restores original state afterwards). This ensures correct
     non-zero values even when the model XML does not set the energy enable flag.
+
+    Args:
+        sim_name: Slot name (default slot if None).
+
+    Returns:
+        JSON: {"potential": float, "kinetic": float, "total": float,
+               "time": float, "energy_enabled": true}
     """
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     m, d = slot.model, slot.data
@@ -227,6 +251,14 @@ async def analyze_forces(ctx: Context, sim_name: str | None = None) -> str:
 
     All vectors are in generalized (joint) coordinates, length nv.
     qacc is the resulting joint acceleration.
+
+    Args:
+        sim_name: Slot name (default slot if None).
+
+    Returns:
+        JSON: {"qfrc_applied": [...], "qfrc_constraint": [...],
+               "qfrc_passive": [...], "qfrc_bias": [...],
+               "qfrc_actuator": [...], "qacc": [...]}
     """
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     m, d = slot.model, slot.data

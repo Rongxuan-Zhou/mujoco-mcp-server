@@ -24,6 +24,15 @@ async def sim_load(
 
     Provide either xml_path (absolute path to .xml file) or xml_string (raw XML).
     Returns model summary: dimensions, named elements, renderer availability.
+
+    Args:
+        xml_path: Absolute path to an .xml MJCF file.
+        xml_string: Raw MJCF XML string (alternative to xml_path).
+        name: Slot name for this simulation (default ``"default"``).
+
+    Returns:
+        JSON: {"name": str, "nq": int, "nv": int, "nu": int,
+               "nbody": int, "has_renderer": bool, ...}
     """
     mgr = ctx.request_context.lifespan_context.sim_manager
     summary = mgr.load(name, xml_path=xml_path, xml_string=xml_string)
@@ -99,6 +108,12 @@ async def sim_reset(ctx: Context, sim_name: str | None = None) -> str:
     """Reset simulation to t=0 with default qpos/qvel.
 
     Clears and stops trajectory recording. Start recording again with sim_record.
+
+    Args:
+        sim_name: Slot name (default slot if None).
+
+    Returns:
+        JSON: {"status": "reset", "time": 0.0}
     """
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     mujoco.mj_resetData(slot.model, slot.data)
@@ -199,6 +214,14 @@ async def sim_record(
 
     While recording, every sim_step appends {t, qpos, qvel} to the trajectory buffer.
     Use export_csv to save the recorded trajectory.
+
+    Args:
+        action: One of ``'start'`` (begin recording), ``'stop'`` (pause),
+                ``'clear'`` (empty buffer and stop).
+        sim_name: Slot name (default slot if None).
+
+    Returns:
+        JSON: {"recording": bool, "frames": int}
     """
     slot = ctx.request_context.lifespan_context.sim_manager.get(sim_name)
     if action == "start":
@@ -219,7 +242,14 @@ async def sim_record(
 @mcp.tool()
 @safe_tool
 async def sim_list(ctx: Context) -> str:
-    """List all loaded simulation slots with their status."""
+    """List all loaded simulation slots with their status.
+
+    Returns:
+        JSON: {"active": str | null,
+               "slots": {name: {"nq": int, "nv": int, "time": float,
+                                "recording": bool, "traj_frames": int,
+                                "has_renderer": bool}}}
+    """
     mgr = ctx.request_context.lifespan_context.sim_manager
     # snapshot_slots() acquires lock internally — safe against concurrent load()
     slots = mgr.snapshot_slots()
