@@ -17,7 +17,8 @@ from mcp.server.fastmcp import Context
 from mcp.types import TextContent, ImageContent
 
 from .._registry import mcp
-from ..compat import resolve_camera, update_scene
+from ..compat import resolve_camera, update_scene, contact_geoms
+from ..constants import ASYNC_YIELD_INTERVAL
 from . import safe_tool
 
 logger = logging.getLogger(__name__)
@@ -133,8 +134,9 @@ def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData", intent: str = 
     contact_lines = []
     for c in range(min(d.ncon, 5)):
         con = d.contact[c]
-        geom1 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, con.geom1) or f"geom{con.geom1}"
-        geom2 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, con.geom2) or f"geom{con.geom2}"
+        gid1, gid2 = contact_geoms(con)
+        geom1 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid1) or f"geom{gid1}"
+        geom2 = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid2) or f"geom{gid2}"
         contact_lines.append(
             f"  {geom1} <-> {geom2} at ({con.pos[0]:.3f},{con.pos[1]:.3f},{con.pos[2]:.3f})m"
         )
@@ -613,6 +615,8 @@ async def track_object(
 
     for step in range(n_steps):
         mujoco.mj_step(m, d)
+        if (step + 1) % ASYNC_YIELD_INTERVAL == 0:
+            await asyncio.sleep(0)  # yield to event loop every 1000 steps
         full_trajectory.append({
             "t": float(d.time),
             "pos": d.xpos[body_id].tolist(),

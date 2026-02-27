@@ -14,6 +14,8 @@ import queue
 from abc import ABC, abstractmethod
 import logging
 
+from .constants import MAX_SENSOR_QUEUE
+
 logger = logging.getLogger(__name__)
 
 # Domain-specific types for type safety
@@ -387,13 +389,18 @@ class ClosedLoopController:
 class SensorManager:
     """Manager for all sensors in the system"""
 
-    def __init__(self):
+    def __init__(self, mj_model=None, mj_data=None):
         self.sensors: Dict[str, SensorProcessor] = {}
-        self.sensor_data_queue = queue.Queue()
+        self.sensor_data_queue = queue.Queue(maxsize=MAX_SENSOR_QUEUE)
         self.running = False
         self.update_thread = None
         self.update_frequency = 100.0  # Hz
         self.logger = logging.getLogger(__name__)
+        self._data_lock = threading.Lock()  # guards _mj_model/_mj_data access
+
+        # Optional real MuJoCo model/data for physics-backed sensing
+        self._mj_model = mj_model
+        self._mj_data = mj_data
 
     def add_sensor(self, sensor_id: str, processor: SensorProcessor):
         """Add sensor to manager"""
@@ -428,18 +435,60 @@ class SensorManager:
         while self.running:
             start_time = time.time()
 
-            # This would be replaced with actual sensor data acquisition
-            # For simulation, we'll generate mock data
-            self._collect_sensor_data()
+            with self._data_lock:
+                self._collect_sensor_data()
 
             elapsed = time.time() - start_time
             sleep_time = max(0, dt - elapsed)
             time.sleep(sleep_time)
 
     def _collect_sensor_data(self):
-        """Collect data from all sensors"""
-        # This is a placeholder - in real implementation,
-        # this would interface with MuJoCo to get sensor data
+        """Collect data from all MuJoCo sensors and queue SensorReadings.
+
+        When a real MuJoCo model/data is attached, reads from d.sensordata using
+        the sensor address table.  Falls back to a no-op if no model is available.
+        """
+        if self._mj_model is None or self._mj_data is None:
+            return  # No real physics attached — nothing to collect
+
+        import mujoco
+        m = self._mj_model
+        d = self._mj_data
+        ts = Timestamp(float(d.time) if d.time > 0 else time.time())
+
+        # Map MuJoCo sensor types to SensorType enum
+        _mjtype_to_sensor = {
+            mujoco.mjtSensor.mjSENS_JOINTPOS:    SensorType.JOINT_POSITION,
+            mujoco.mjtSensor.mjSENS_JOINTVEL:    SensorType.JOINT_VELOCITY,
+            mujoco.mjtSensor.mjSENS_JOINTACTFRC: SensorType.JOINT_TORQUE,
+            mujoco.mjtSensor.mjSENS_ACCELEROMETER: SensorType.IMU,
+            mujoco.mjtSensor.mjSENS_GYRO:        SensorType.IMU,
+            mujoco.mjtSensor.mjSENS_FORCE:       SensorType.FORCE_TORQUE,
+            mujoco.mjtSensor.mjSENS_TORQUE:      SensorType.FORCE_TORQUE,
+            mujoco.mjtSensor.mjSENS_TOUCH:       SensorType.CONTACT,
+            mujoco.mjtSensor.mjSENS_RANGEFINDER: SensorType.PROXIMITY,
+        }
+
+        for i in range(m.nsensor):
+            name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_SENSOR, i) or f"sensor_{i}"
+            adr = int(m.sensor_adr[i])
+            dim = int(m.sensor_dim[i])
+            raw_data = d.sensordata[adr: adr + dim].copy()
+
+            sensor_type = _mjtype_to_sensor.get(
+                m.sensor_type[i], SensorType.JOINT_POSITION
+            )
+            reading = SensorReading(
+                sensor_id=name,
+                sensor_type=sensor_type,
+                timestamp=ts,
+                data=raw_data,
+                quality=Quality(1.0),
+            )
+            try:
+                self.sensor_data_queue.put_nowait(reading)
+            except queue.Full:
+                pass  # drop oldest reads if queue is full
 
     def get_latest_readings(self) -> List[SensorReading]:
         """Get latest sensor readings"""

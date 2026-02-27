@@ -7,6 +7,7 @@ from mcp.server.fastmcp import Context
 
 from .._registry import mcp
 from ..compat import get_version_info
+from ..constants import BATCH_MAX_WORKERS_DEFAULT
 from ..utils.gl_setup import get_gl_diagnostics
 from . import safe_tool
 
@@ -38,7 +39,7 @@ async def server_diagnostics(ctx: Context) -> str:
 
     # I-3: get_gl_diagnostics() spawns subprocesses (up to 30s).
     # Run in a thread pool so the async event loop stays unblocked.
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     gl_info = await loop.run_in_executor(None, get_gl_diagnostics)
 
     return json.dumps({
@@ -53,7 +54,7 @@ async def server_diagnostics(ctx: Context) -> str:
         "env": {
             "MUJOCO_GL":              os.environ.get("MUJOCO_GL", "unset"),
             "MUJOCO_MCP_NO_RENDER":   os.environ.get("MUJOCO_MCP_NO_RENDER", "0"),
-            "MUJOCO_MCP_MAX_WORKERS": os.environ.get("MUJOCO_MCP_MAX_WORKERS", "8"),
+            "MUJOCO_MCP_MAX_WORKERS": os.environ.get("MUJOCO_MCP_MAX_WORKERS", str(BATCH_MAX_WORKERS_DEFAULT)),
         },
         "active_slot": mgr.active_slot,
         "slots":       slots_info,

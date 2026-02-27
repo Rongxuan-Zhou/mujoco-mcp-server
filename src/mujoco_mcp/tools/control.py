@@ -4,12 +4,14 @@ Provides PID + trajectory control accessible via MCP.
 Controllers are stored per sim slot and persist across tool calls.
 """
 
+import asyncio
 import json
 import numpy as np
 import mujoco
 from mcp.server.fastmcp import Context
 
 from .._registry import mcp
+from ..constants import ASYNC_YIELD_INTERVAL
 from . import safe_tool, _viewer_sync
 from ..advanced_controllers import (
     TrajectoryPlanner,
@@ -139,7 +141,7 @@ async def step_controller(
     ctrl = _get_controller(slot)
 
     trajectory_done = False
-    for _ in range(n_steps):
+    for step in range(n_steps):
         target = ctrl.get_trajectory_command()
         if target is None:
             trajectory_done = True
@@ -148,13 +150,14 @@ async def step_controller(
         commands = ctrl.pid_control(target, current_qpos)
         data.ctrl[:min(len(commands), model.nu)] = commands[:model.nu]
         mujoco.mj_step(model, data)
-
-    if slot.recording:
-        slot.trajectory.append({
-            "t": float(data.time),
-            "qpos": data.qpos.tolist(),
-            "qvel": data.qvel.tolist(),
-        })
+        if slot.recording:
+            slot.trajectory.append({
+                "t": float(data.time),
+                "qpos": data.qpos.tolist(),
+                "qvel": data.qvel.tolist(),
+            })
+        if (step + 1) % ASYNC_YIELD_INTERVAL == 0:
+            await asyncio.sleep(0)  # yield to event loop every 1000 steps
     _viewer_sync(slot)
 
     return json.dumps({

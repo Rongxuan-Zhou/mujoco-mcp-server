@@ -10,10 +10,8 @@ import numpy as np
 from mcp.server.fastmcp import Context
 
 from .._registry import mcp
+from ..constants import BATCH_TASK_TIMEOUT, BATCH_MAX_WORKERS_DEFAULT
 from . import safe_tool
-
-MAX_WORKERS_DEFAULT = 8
-TASK_TIMEOUT_SECONDS = 300
 
 
 # ──────────────────────────────────────────────
@@ -186,11 +184,11 @@ async def run_sweep(
         track = ["energy", "contact_count"]
 
     workers = max_workers or int(
-        os.environ.get("MUJOCO_MCP_MAX_WORKERS", str(MAX_WORKERS_DEFAULT))
+        os.environ.get("MUJOCO_MCP_MAX_WORKERS", str(BATCH_MAX_WORKERS_DEFAULT))
     )
     workers = min(workers, len(values))
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     results = []
     errors = []
 
@@ -203,11 +201,11 @@ async def run_sweep(
         async def _collect(v, cf):
             try:
                 return await loop.run_in_executor(
-                    None, lambda: cf.result(timeout=TASK_TIMEOUT_SECONDS)
+                    None, lambda: cf.result(timeout=BATCH_TASK_TIMEOUT)
                 )
             except FuturesTimeoutError:
                 return {"_error": True, "value": v,
-                        "error": "timeout", "timeout_s": TASK_TIMEOUT_SECONDS}
+                        "error": "timeout", "timeout_s": BATCH_TASK_TIMEOUT}
             except Exception as e:
                 return {"_error": True, "value": v, "error": str(e)}
 
