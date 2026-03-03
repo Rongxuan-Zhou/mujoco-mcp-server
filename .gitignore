@@ -36,3 +36,8 @@ models/table_ur5e.xml
 
 # Internal development planning documents
 docs/plans/
+
+# Internal documentation (keep only README.md)
+CLAUDE.md
+*.architecture*.md
+mujoco_mcp_architecture*.md
