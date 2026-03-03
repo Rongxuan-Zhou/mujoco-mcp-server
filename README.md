@@ -7,7 +7,7 @@
 
 MuJoCo physics simulation exposed as **MCP tools** for Claude Code and other MCP clients.
 
-**53 tools** · multi-slot simulation · Menagerie robot library · optional Gemini vision analysis
+**52 tools** · multi-slot simulation · Menagerie robot library · optional Gemini vision analysis
 
 ---
 
@@ -34,15 +34,15 @@ MuJoCo physics simulation exposed as **MCP tools** for Claude Code and other MCP
 ### Install
 
 ```bash
-pip install mujoco-mcp-server
-```
-
-Or in development mode:
-
-```bash
 git clone https://github.com/<your-org>/mujoco-mcp-server.git
 cd mujoco-mcp-server
 pip install -e .
+```
+
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv pip install -e .
 ```
 
 ### Run
@@ -86,7 +86,7 @@ export GEMINI_API_KEY=your_key
 | Group | Tools | Description |
 |---|---|---|
 | **Simulation** | `sim_load` `sim_step` `sim_forward` `sim_reset` `sim_get_state` `sim_set_state` `sim_record` `sim_list` | Load models and step physics |
-| **Rendering** | `render_snapshot` `render_depth` `render_figure_strip` | PNG images and depth maps |
+| **Rendering** | `render_snapshot` `render_depth` | PNG snapshots and depth maps |
 | **Analysis** | `analyze_contacts` `analyze_energy` `analyze_forces` `compute_jacobian` `compute_derivatives` `read_sensors` | Physics diagnostics |
 | **Model** | `modify_model` `reload_from_xml` | Parameter edits and structural reload |
 | **Batch** | `run_sweep` | Parallel parameter sweeps |
@@ -97,7 +97,9 @@ export GEMINI_API_KEY=your_key
 | **Sensor Fusion** | `configure_sensor_fusion` `get_fused_state` | Filtered joint state estimation |
 | **Coordination** | `coordinator_add_robot` `coordinator_get_status` `coordinator_check_collisions` `coordinator_assign_task` | Multi-robot fleet management |
 | **RL** | `create_rl_env` `rl_step` | Gymnasium RL environment wrapper |
-| **Vision** *(optional)* | `analyze_scene` `compare_scenes` `track_object` | Gemini 2.5 Pro visual analysis |
+| **Viewer** | `viewer_open` `viewer_sync` `viewer_close` | Live interactive viewer window |
+| **Vision** *(optional)* | `analyze_scene` `compare_scenes` `track_object` `render_figure_strip` | Gemini 2.5 Pro visual analysis |
+| **Meta** | `server_diagnostics` | Server health and GL backend info |
 | **Workflow** | `run_and_analyze` `debug_contacts` `evaluate_trajectory` `compare_trajectories` | Composite research workflows |
 
 ---
