@@ -1,6 +1,5 @@
 """MCP Prompts — guided prompt templates for common simulation workflows."""
 
-from mcp.server.fastmcp import Context
 from ._registry import mcp
 
 

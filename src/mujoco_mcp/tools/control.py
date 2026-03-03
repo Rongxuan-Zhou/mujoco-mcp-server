@@ -182,7 +182,7 @@ async def get_controller_state(ctx: Context, sim_name: str | None = None) -> str
     """
     sm = ctx.request_context.lifespan_context.sim_manager
     slot = sm.get(sim_name)
-    model, data = slot.model, slot.data
+    data = slot.data
     ctrl = _get_controller(slot)
 
     target = ctrl.get_trajectory_command()

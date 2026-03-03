@@ -263,12 +263,16 @@ class MuJoCoRLEnvironment(gym.Env):
         >>> env.close()
     """
 
-    def __init__(self, config: RLConfig):
+    def __init__(self, config: RLConfig, mj_model=None, mj_data=None):
         super().__init__()
 
         self.config = config
         self.viewer_client = None  # headless mode
         self.sensor_manager = SensorManager()
+
+        # Real MuJoCo model/data — when provided, physics are actually stepped
+        self._mj_model = mj_model
+        self._mj_data = mj_data
 
         # RL state
         self.current_step = 0
@@ -609,9 +613,16 @@ class MuJoCoRLEnvironment(gym.Env):
         # Apply action
         self._apply_action(action)
 
-        # Get new observation
+        # Step physics (real MuJoCo) or fallback sleep
         prev_obs = self._get_observation()
-        time.sleep(self.config.control_timestep)  # Simulate physics step
+        if self._mj_model is not None and self._mj_data is not None:
+            import mujoco as _mujoco
+            physics_dt = self._mj_model.opt.timestep
+            n_phys = max(1, round(self.config.control_timestep / physics_dt))
+            for _ in range(n_phys):
+                _mujoco.mj_step(self._mj_model, self._mj_data)
+        else:
+            time.sleep(self.config.control_timestep)
         new_obs = self._get_observation()
 
         # Compute reward
@@ -660,8 +671,12 @@ class MuJoCoRLEnvironment(gym.Env):
         # Scale action to appropriate range
         scaled_action = action * 10.0  # Scale to reasonable torque range
 
-        # Send command to MuJoCo
-        if self.viewer_client is not None:
+        if self._mj_data is not None:
+            # Write controls directly into MuJoCo data
+            nu = self._mj_model.nu if self._mj_model is not None else len(scaled_action)
+            n = min(len(scaled_action), nu)
+            self._mj_data.ctrl[:n] = scaled_action[:n]
+        elif self.viewer_client is not None:
             self.viewer_client.send_command(
                 {
                     "type": "set_joint_positions",
@@ -679,6 +694,18 @@ class MuJoCoRLEnvironment(gym.Env):
         Raises:
             RuntimeError: If state cannot be retrieved from simulation.
         """
+        if self._mj_data is not None:
+            # Read directly from real MuJoCo state
+            obs_size = self.observation_space.shape[0]
+            qpos = self._mj_data.qpos.copy()
+            qvel = self._mj_data.qvel.copy()
+            obs = np.concatenate([qpos, qvel])
+            if len(obs) < obs_size:
+                obs = np.pad(obs, (0, obs_size - len(obs)))
+            else:
+                obs = obs[:obs_size]
+            return obs.astype(np.float32)
+
         if self.viewer_client is None:
             return np.zeros(self.observation_space.shape, dtype=np.float32)
         response = self.viewer_client.send_command({"type": "get_state", "model_id": self.model_id})
@@ -941,7 +968,7 @@ def example_training():
     print("=" * 50)
 
     # Run random baseline
-    baseline_results = trainer.random_policy_baseline(num_episodes=5)
+    trainer.random_policy_baseline(num_episodes=5)
 
     # Simple PID policy example
     def pid_policy(obs):

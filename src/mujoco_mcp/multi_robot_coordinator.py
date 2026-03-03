@@ -132,7 +132,6 @@ class CollisionChecker:
         """Find collision-free path using simple potential field method"""
 
         waypoints = []
-        current_pos = start_pos.copy()
 
         for i in range(num_waypoints):
             # Direct path point
@@ -155,7 +154,6 @@ class CollisionChecker:
             # Combine attractive and repulsive forces
             adjusted_pos = target_pos + 0.1 * repulsive_force
             waypoints.append(adjusted_pos)
-            current_pos = adjusted_pos
 
         return waypoints
 
@@ -408,7 +406,6 @@ class MultiRobotCoordinator:
     def _execute_cooperative_manipulation(self, task: CoordinatedTask):
         """Execute cooperative manipulation task"""
         robots = task.robots
-        target_object = task.parameters.get("target_object")
 
         # Plan coordinated trajectories
         for robot_id in robots:

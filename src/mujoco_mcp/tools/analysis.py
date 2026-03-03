@@ -6,7 +6,7 @@ import numpy as np
 from mcp.server.fastmcp import Context
 
 from .._registry import mcp
-from ..compat import resolve_name, list_named, ensure_energy, restore_energy, contact_geoms
+from ..compat import resolve_name, ensure_energy, restore_energy, contact_geoms
 from ..constants import JACOBIAN_NV_THRESHOLD
 from . import safe_tool
 

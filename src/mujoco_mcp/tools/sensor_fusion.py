@@ -4,14 +4,12 @@ Wraps SensorFusion and SensorManager from sensor_feedback.py into MCP tools.
 """
 
 import json
-import numpy as np
-import mujoco
 from mcp.server.fastmcp import Context
 
 from .._registry import mcp
 from . import safe_tool
 from ..sensor_feedback import (
-    SensorManager, SensorFusion, SensorType, SensorReading, create_robot_sensor_suite
+    SensorFusion, SensorType, SensorReading, create_robot_sensor_suite
 )
 import time
 
@@ -49,6 +47,10 @@ async def configure_sensor_fusion(
     slot = sim_manager.get(sim_name)
 
     sensor_suite = create_robot_sensor_suite(robot_type, n_joints)
+    # Attach real MuJoCo model/data so _collect_sensor_data reads from d.sensordata
+    with sensor_suite._data_lock:
+        sensor_suite._mj_model = slot.model
+        sensor_suite._mj_data = slot.data
     slot.sensor_manager = sensor_suite
     slot.sensor_manager_n_joints = n_joints
 

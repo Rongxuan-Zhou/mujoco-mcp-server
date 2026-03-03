@@ -1,6 +1,5 @@
 """Rendering tools (tools 9–10): render_snapshot, render_depth."""
 
-import json
 import base64
 import mujoco
 import numpy as np

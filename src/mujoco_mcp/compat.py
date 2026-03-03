@@ -2,7 +2,6 @@
 Import once, use everywhere. Must be imported AFTER gl_setup sets MUJOCO_GL."""
 
 import mujoco
-import numpy as np
 from packaging.version import Version
 from typing import Optional
 import logging

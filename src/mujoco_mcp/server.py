@@ -17,7 +17,7 @@ from .utils.gl_setup import detect_and_set_gl_backend
 
 _gl_backend = detect_and_set_gl_backend()  # STEP 1: set MUJOCO_GL before mujoco import
 
-import mujoco  # noqa: E402  # STEP 2: reads MUJOCO_GL once
+import mujoco  # noqa: E402,F401  # STEP 2: reads MUJOCO_GL once (side-effect import)
 
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
@@ -62,7 +62,7 @@ _set_lifespan(app_lifespan)
 # Register all tool modules (importing them causes @mcp.tool() decorators to fire)
 from .tools import simulation, rendering, meta  # noqa: E402, F401
 from .tools import analysis, model, batch, export, workflows, viewer  # noqa: E402, F401
-from .tools import spatial, menagerie, control, sensor_fusion, coordination, rl_env, vision  # noqa: E402, F401
+from .tools import spatial, menagerie, control, sensor_fusion, coordination, rl_env, vision  # noqa: E402,F401,E501
 from . import resources, prompts  # noqa: E402, F401
 
 # Keep backward-compatible alias

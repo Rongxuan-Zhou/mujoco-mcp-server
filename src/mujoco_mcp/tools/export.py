@@ -1,11 +1,11 @@
 """Export tools (tools 25–26): export_csv, plot_data."""
 
+import asyncio
 import base64
 import io
 import json
 import os
 
-import numpy as np
 from mcp.server.fastmcp import Context
 
 from .._registry import mcp
@@ -42,9 +42,14 @@ async def export_csv(
     qpos_len = len(first.get("qpos", []))
     qvel_len = len(first.get("qvel", []))
 
+    # Detect energy columns in trajectory frames
+    has_energy = include_energy and ("E_pot" in first or "E_kin" in first)
+
     fieldnames = ["t"]
     fieldnames += [f"qpos_{i}" for i in range(qpos_len)]
     fieldnames += [f"qvel_{i}" for i in range(qvel_len)]
+    if has_energy:
+        fieldnames += ["E_pot", "E_kin"]
 
     rows_written = 0
     try:
@@ -60,17 +65,26 @@ async def export_csv(
                 qvel = frame.get("qvel", [])
                 for i, v in enumerate(qvel):
                     row[f"qvel_{i}"] = v
+                if has_energy:
+                    row["E_pot"] = frame.get("E_pot", "")
+                    row["E_kin"] = frame.get("E_kin", "")
                 writer.writerow(row)
                 rows_written += 1
     except OSError as e:
         return json.dumps({"error": f"Cannot write CSV: {e}"})
 
-    return json.dumps({
-        "ok":          True,
-        "path":        output_path,
-        "rows":        rows_written,
-        "columns":     fieldnames,
-    }, indent=2)
+    result: dict = {
+        "ok":      True,
+        "path":    output_path,
+        "rows":    rows_written,
+        "columns": fieldnames,
+    }
+    if include_energy and not has_energy:
+        result["warning"] = (
+            "include_energy=True but no energy data found in trajectory frames. "
+            "Record with run_and_analyze(track=['energy']) to capture E_pot/E_kin."
+        )
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
@@ -104,7 +118,8 @@ async def plot_data(
         return [TextContent(type="text",
                             text=json.dumps({"error": f"CSV not found: {csv_path}"}))]
 
-    df = pd.read_csv(csv_path)
+    loop = asyncio.get_running_loop()
+    df = await loop.run_in_executor(None, pd.read_csv, csv_path)
 
     if x_col not in df.columns:
         return [TextContent(type="text",
@@ -140,7 +155,7 @@ async def plot_data(
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
             with open(output_path, "wb") as f:
                 f.write(base64.b64decode(b64))
-        except OSError as e:
+        except OSError:
             pass  # non-fatal; image still returned inline
 
     summary = {

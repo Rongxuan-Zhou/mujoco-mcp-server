@@ -24,5 +24,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/mujoco_mcp"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/mujoco_mcp/server.py" = ["E402"]
+
 [project.optional-dependencies]
 vision = ["google-genai>=1.0,<2.0"]
