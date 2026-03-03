@@ -63,8 +63,7 @@ def _get_client(api_key: str):
 
 def _call_with_retry(fn, max_retries: int = 3, base_delay: float = 2.0):
     """Call *fn()* with exponential-backoff retry on 429 / RESOURCE_EXHAUSTED."""
-    if max_retries < 1:
-        max_retries = 1
+    max_retries = max(1, max_retries)
     for attempt in range(max_retries):
         try:
             return fn()
@@ -80,12 +79,39 @@ def _call_with_retry(fn, max_retries: int = 3, base_delay: float = 2.0):
             raise
 
 
+def _extract_response_text(response) -> str:
+    """Extract text from a Gemini response, raising on None."""
+    text = response.text
+    if text is None:
+        finish = getattr(response, "finish_reason", "unknown")
+        raise ValueError(f"Gemini returned no text (finish_reason={finish})")
+    return text
+
+
 # ── Intent detection ──────────────────────────────────────────────────────────
 
 _INTENT_KEYWORDS: dict[str, list[str]] = {
     "physics": ["contact", "touch", "force", "collision", "friction", "penetration", "impact"],
     "comparison": ["compare", "difference", "change", "before", "after", "versus", "vs", "between"],
     "kinematics": ["pose", "position", "joint", "angle", "where", "extend", "reach", "end-effector", "link"],
+}
+
+_INTENT_GUIDANCE: dict[str, str] = {
+    "physics": (
+        "**Physics Focus**: Quantify contact normal forces (estimated from penetration depth and stiffness). "
+        "Name the geom pairs in contact. Report penetration depth in millimeters. "
+        "Describe friction direction if visible."
+    ),
+    "kinematics": (
+        "**Kinematics Focus**: List each joint angle in radians. "
+        "Describe the end-effector world position in (x, y, z) meters. "
+        "Note any joint near its limit (within 10% of range)."
+    ),
+    "comparison": (
+        "**Comparison Focus**: For each body/joint that changed, report delta-position and delta-angle. "
+        "Use format: 'body_name: before -> after (delta = value)'. "
+        "Summarise the most significant change first."
+    ),
 }
 
 
@@ -160,25 +186,6 @@ def _build_system_prompt(m: "mujoco.MjModel", d: "mujoco.MjData", intent: str = 
     if contact_lines:
         parts += ["", f"### Active Contacts ({d.ncon} total, showing up to 5)", "\n".join(contact_lines)]
 
-    _INTENT_GUIDANCE = {
-        "physics": (
-            "**Physics Focus**: Quantify contact normal forces (estimated from penetration depth and stiffness). "
-            "Name the geom pairs in contact. Report penetration depth in millimeters. "
-            "Describe friction direction if visible."
-        ),
-        "kinematics": (
-            "**Kinematics Focus**: List each joint angle in radians. "
-            "Describe the end-effector world position in (x, y, z) meters. "
-            "Note any joint near its limit (within 10% of range)."
-        ),
-        "comparison": (
-            "**Comparison Focus**: For each body/joint that changed, report delta-position and delta-angle. "
-            "Use format: 'body_name: before -> after (delta = value)'. "
-            "Summarise the most significant change first."
-        ),
-        "general": "",
-    }
-
     guidance = _INTENT_GUIDANCE.get(intent, "")
     parts += [
         "",
@@ -224,11 +231,7 @@ def _call_gemini(
             temperature=0.1,
         ),
     ))
-    text = response.text
-    if text is None:
-        finish = getattr(response, "finish_reason", "unknown")
-        raise ValueError(f"Gemini returned no text (finish_reason={finish})")
-    return text
+    return _extract_response_text(response)
 
 
 # ---------------------------------------------------------------------------
@@ -258,12 +261,12 @@ def _render_slot_image(
         buf = BytesIO()
         # Convert to RGB before any format-specific save (JPEG cannot handle RGBA)
         img = img.convert("RGB")
-        use_jpeg = (width * height) > 262144
-        if use_jpeg:
+        if (width * height) > 262144:
             try:
-                quality = max(1, min(95, int(os.environ.get("MUJOCO_MCP_VISION_JPEG_QUALITY", "85"))))
-            except ValueError:
+                quality = int(os.environ.get("MUJOCO_MCP_VISION_JPEG_QUALITY", "85"))
+            except (ValueError, TypeError):
                 quality = 85
+            quality = max(1, min(95, quality))
             img.save(buf, format="JPEG", quality=quality, optimize=True)
             mime_type = "image/jpeg"
         else:
@@ -291,13 +294,11 @@ def _call_gemini_multi_image(
     client = _get_client(api_key)
 
     parts: list = []
-    image_index = 0
-    for img_entry in images:
-        image_index += 1
+    for idx, img_entry in enumerate(images, start=1):
         if img_entry is None:
             continue
         img_bytes, img_mime = img_entry
-        parts.append(genai_types.Part(text=f"Image {image_index}:"))
+        parts.append(genai_types.Part(text=f"Image {idx}:"))
         parts.append(
             genai_types.Part(
                 inline_data=genai_types.Blob(data=img_bytes, mime_type=img_mime)
@@ -314,11 +315,7 @@ def _call_gemini_multi_image(
             temperature=0.1,
         ),
     ))
-    text = response.text
-    if text is None:
-        finish = getattr(response, "finish_reason", "unknown")
-        raise ValueError(f"Gemini returned no text (finish_reason={finish})")
-    return text
+    return _extract_response_text(response)
 
 
 @mcp.tool()
@@ -366,11 +363,11 @@ async def analyze_scene(
     system_prompt = _build_system_prompt(m, d, intent=intent)
 
     png_bytes = None
-    img_mime_type = "image/png"
+    mime_type = "image/png"
     image_sent = False
     result = _render_slot_image(mgr, slot, camera, width, height)
     if result is not None:
-        png_bytes, img_mime_type = result
+        png_bytes, mime_type = result
         image_sent = True
     else:
         system_prompt += "\n\n*Note: No rendered image available — analysis based on metadata only.*"
@@ -383,7 +380,7 @@ async def analyze_scene(
             system_prompt=system_prompt,
             user_prompt=prompt,
             png_bytes=png_bytes,
-            mime_type=img_mime_type if image_sent else "image/png",
+            mime_type=mime_type,
         ))
     except Exception as e:
         return _make_error(
@@ -446,9 +443,17 @@ async def compare_scenes(
     mgr = ctx.request_context.lifespan_context.sim_manager
 
     # ------------------------------------------------------------------
-    # Resolve slot names
+    # Resolve slot names: require both or neither
     # ------------------------------------------------------------------
-    if slot_a is None and slot_b is None:
+    if (slot_a is None) != (slot_b is None):
+        missing = "slot_b" if slot_b is None else "slot_a"
+        return _make_error(
+            "INVALID_ARGS",
+            f"{missing} must be provided when the other is specified. "
+            "Pass both slot names, or omit both to auto-select.",
+        )
+
+    if slot_a is None:
         all_slots = list(mgr.snapshot_slots().keys())
         if len(all_slots) < 2:
             return _make_error(
@@ -456,16 +461,6 @@ async def compare_scenes(
                 f"compare_scenes needs at least 2 loaded slots, but only {len(all_slots)} found: {all_slots}",
             )
         name_a, name_b = all_slots[0], all_slots[1]
-    elif slot_a is not None and slot_b is None:
-        return _make_error(
-            "INVALID_ARGS",
-            "slot_b must be provided when slot_a is specified. Pass both slot names, or omit both to auto-select.",
-        )
-    elif slot_a is None and slot_b is not None:
-        return _make_error(
-            "INVALID_ARGS",
-            "slot_a must be provided when slot_b is specified. Pass both slot names, or omit both to auto-select.",
-        )
     else:
         name_a, name_b = slot_a, slot_b  # type: ignore[assignment]
 

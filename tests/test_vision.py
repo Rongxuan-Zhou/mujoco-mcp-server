@@ -355,7 +355,6 @@ def test_call_with_retry_retries_on_429():
 def test_call_with_retry_raises_non_rate_limit():
     def fn():
         raise ValueError("bad model")
-    import pytest
     with pytest.raises(ValueError, match="bad model"):
         _call_with_retry(fn, max_retries=3)
 
@@ -368,15 +367,12 @@ def test_render_slot_image_small_uses_png(monkeypatch):
     """Images <= 512x512 pixels should use PNG."""
     monkeypatch.delenv("MUJOCO_MCP_VISION_JPEG_QUALITY", raising=False)
     import numpy as np
-    from unittest.mock import MagicMock
     pixels = np.zeros((100, 100, 3), dtype=np.uint8)
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = pixels
     mock_mgr = MagicMock()
     mock_mgr.require_renderer.return_value = mock_renderer
     mock_slot = MagicMock()
-    mock_slot.model = MagicMock()
-    mock_slot.data = MagicMock()
 
     result = _render_slot_image(mock_mgr, mock_slot, camera=None, width=100, height=100)
     assert result is not None
@@ -385,18 +381,15 @@ def test_render_slot_image_small_uses_png(monkeypatch):
 
 
 def test_render_slot_image_large_uses_jpeg(monkeypatch):
-    """Images with pixel count > 262144 use JPEG (512×512=262144 still PNG, 640×640=409600 uses JPEG)."""
+    """Images with pixel count > 262144 use JPEG (512x512=262144 still PNG, 640x640=409600 uses JPEG)."""
     monkeypatch.setenv("MUJOCO_MCP_VISION_JPEG_QUALITY", "85")
     import numpy as np
-    from unittest.mock import MagicMock
     pixels = np.zeros((640, 640, 3), dtype=np.uint8)
     mock_renderer = MagicMock()
     mock_renderer.render.return_value = pixels
     mock_mgr = MagicMock()
     mock_mgr.require_renderer.return_value = mock_renderer
     mock_slot = MagicMock()
-    mock_slot.model = MagicMock()
-    mock_slot.data = MagicMock()
 
     result = _render_slot_image(mock_mgr, mock_slot, camera=None, width=640, height=640)
     assert result is not None
