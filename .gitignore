@@ -1,0 +1,38 @@
+# Python compiled files
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Build / distribution
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Test & lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Large local binary model assets
+models/*.stl
+models/table_robot_demo.xml
+models/table_ur5e.xml
+
+# Internal development planning documents
+docs/plans/
