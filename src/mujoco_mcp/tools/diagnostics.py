@@ -110,7 +110,6 @@ def model_summary_impl(model: mujoco.MjModel, data: mujoco.MjData) -> str:
         "njnt": model.njnt,
         "nsensor": model.nsensor,
         "ntendon": model.ntendon,
-        "nactuator": model.nu,
         "timestep": float(model.opt.timestep),
         "integrator": int(model.opt.integrator),
         "solver": int(model.opt.solver),
@@ -147,10 +146,14 @@ def model_summary_impl(model: mujoco.MjModel, data: mujoco.MjData) -> str:
         ]
         heaviest_idx = int(np.argmax(masses))
         lightest_idx = int(np.argmin(masses))
-        summary["heaviest_body"] = {"name": body_names[heaviest_idx], "mass": float(masses[heaviest_idx])}
-        summary["lightest_body"] = {"name": body_names[lightest_idx], "mass": float(masses[lightest_idx])}
-        if masses[heaviest_idx] > 0 and masses[lightest_idx] > 0:
-            summary["mass_ratio"] = float(masses[heaviest_idx] / masses[lightest_idx])
+        if masses[heaviest_idx] > 0:
+            summary["heaviest_body"] = {"name": body_names[heaviest_idx], "mass": float(masses[heaviest_idx])}
+            summary["lightest_body"] = {"name": body_names[lightest_idx], "mass": float(masses[lightest_idx])}
+            if masses[lightest_idx] > 0:
+                summary["mass_ratio"] = float(masses[heaviest_idx] / masses[lightest_idx])
+        else:
+            summary["heaviest_body"] = None
+            summary["lightest_body"] = None
     else:
         summary["heaviest_body"] = None
         summary["lightest_body"] = None
