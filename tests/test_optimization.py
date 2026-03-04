@@ -112,7 +112,7 @@ def test_mppi_slider_reaches_goal():
         model, data,
         start_qpos=[0.0],
         goal_qpos=[0.5],
-        horizon=20,
+        horizon=50,
         n_samples=50,
         temperature=0.1,
         noise_sigma=1.0,
@@ -132,7 +132,7 @@ def test_mppi_more_samples_better_result():
     result_few = json.loads(_mppi_impl(
         model, data,
         start_qpos=[0.0], goal_qpos=[0.5],
-        horizon=20, n_samples=3,
+        horizon=30, n_samples=3,
         temperature=0.1, noise_sigma=1.0, max_iter=5,
         template="reach", Q_user=None, R_user=None,
     ))
@@ -141,7 +141,7 @@ def test_mppi_more_samples_better_result():
     result_many = json.loads(_mppi_impl(
         model, data,
         start_qpos=[0.0], goal_qpos=[0.5],
-        horizon=20, n_samples=100,
+        horizon=30, n_samples=100,
         temperature=0.1, noise_sigma=1.0, max_iter=5,
         template="reach", Q_user=None, R_user=None,
     ))

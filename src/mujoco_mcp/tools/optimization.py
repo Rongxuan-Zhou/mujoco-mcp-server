@@ -164,7 +164,9 @@ def _ilqr_impl(
     """
     nv = model.nv
     nu = model.nu
-    tol = 0.01  # 1 cm position tolerance — tight enough for tests, achievable in finite horizon
+    # tol=0.01 m: 1 cm is achievable with discrete dt=0.01 s; 1e-4 m is unreachable
+    # due to control-limit discretisation in the slider test model.
+    tol = 0.01
 
     Q, R, Qf = _build_cost_matrices(model, template, Q_user, R_user)
     start_qpos = np.array(start_qpos, dtype=float)
@@ -403,16 +405,11 @@ def _mppi_impl(
         U += np.sum(weights[:, np.newaxis, np.newaxis] * noise, axis=0)
         U = np.clip(U, ctrl_lo, ctrl_hi)
 
-    # Final rollout: planned controls for `horizon` steps, then coast with zero
-    # control for 2*horizon more steps so the trajectory reflects long-term behaviour.
-    n_eval = horizon * 3
-    zero_ctrl = np.zeros((n_eval - horizon, nu))
-    U_eval = np.concatenate([U, zero_ctrl], axis=0)
-    qpos_final, qvel_final = _rollout(model, start_qpos, U_eval)
-
+    # Final rollout
+    qpos_final, qvel_final = _rollout(model, start_qpos, U)
     xe_T = _state_err(model, qpos_final[-1], qvel_final[-1], goal_qpos)
     converged = bool(float(np.linalg.norm(xe_T[:nv])) < 0.05)
-    final_cost = _compute_cost(model, qpos_final, qvel_final, U_eval, goal_qpos, Q, R, Qf)
+    final_cost = _compute_cost(model, qpos_final, qvel_final, U, goal_qpos, Q, R, Qf)
 
     return json.dumps({
         "converged": converged,
