@@ -7,7 +7,6 @@ import mujoco
 from mujoco_mcp.tools.optimization import (
     _ilqr_impl,
     _mppi_impl,
-    _build_cost_matrices,
 )
 
 # ── Simple 1-DOF slider model ─────────────────────────────────────────────────
@@ -64,6 +63,7 @@ def test_ilqr_custom_QR_accepted():
         template="reach", Q_user=None, R_user=None,
     ))
     # Heavy control penalty → should use less control effort
+    model, data = _make_slider()
     R_heavy = [[100.0]]  # 1×1 matrix
     Q_light = [[1.0, 0.0], [0.0, 0.1]]  # 2×2 matrix
     result_custom = json.loads(_ilqr_impl(
@@ -135,6 +135,7 @@ def test_mppi_more_samples_better_result():
         temperature=0.1, noise_sigma=1.0, max_iter=5,
         template="reach", Q_user=None, R_user=None,
     ))
+    model, data = _make_slider()
     np.random.seed(42)
     result_many = json.loads(_mppi_impl(
         model, data,
