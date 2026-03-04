@@ -3,15 +3,13 @@ from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ET
-from typing import Optional
-
 import mujoco
 
 from .._registry import mcp
 from . import safe_tool
 
 
-def validate_mjcf_impl(*, xml_path: Optional[str] = None, xml_string: Optional[str] = None) -> str:
+def validate_mjcf_impl(*, xml_path: str | None = None, xml_string: str | None = None) -> str:
     """Core logic for validate_mjcf — testable without MCP context."""
     if xml_path is not None and xml_string is not None:
         return json.dumps({"valid": False, "errors": [{"rule": "invalid_input", "element": "args", "message": "Provide xml_path or xml_string, not both"}], "warnings": []})
@@ -37,17 +35,17 @@ def validate_mjcf_impl(*, xml_path: Optional[str] = None, xml_string: Optional[s
     if worldbody is None:
         errors.append({"rule": "missing_worldbody", "element": "mujoco", "message": "No <worldbody> element found"})
 
-    # Check for duplicate names across all named elements
-    names_seen: dict[str, str] = {}
+    # Check for duplicate names within the same element type (MuJoCo uses per-type namespaces)
+    names_seen: dict[tuple, str] = {}
     for elem in root.iter():
         name = elem.get("name")
         if name:
-            key = name
+            key = (elem.tag, name)
             if key in names_seen:
                 errors.append({
                     "rule": "duplicate_name",
                     "element": f"<{elem.tag} name='{name}'>",
-                    "message": f"Duplicate name '{name}' (also used by <{names_seen[key]}>)",
+                    "message": f"Duplicate name '{name}' on element <{elem.tag}>",
                 })
             else:
                 names_seen[key] = elem.tag
@@ -103,8 +101,8 @@ def validate_mjcf_impl(*, xml_path: Optional[str] = None, xml_string: Optional[s
 @mcp.tool()
 @safe_tool
 async def validate_mjcf(
-    xml_path: Optional[str] = None,
-    xml_string: Optional[str] = None,
+    xml_path: str | None = None,
+    xml_string: str | None = None,
 ) -> str:
     """Pre-load static validation of MJCF XML. Does NOT require a loaded sim slot.
 
