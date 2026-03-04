@@ -171,8 +171,15 @@ def suggest_contact_params_impl(
     timestep = float(model.opt.timestep)
     issues: list[dict] = []
 
-    # Read global default contact params (average over all geoms)
-    if model.ngeom > 0:
+    # If specific geoms are requested, use their params; otherwise use global average
+    if geom1 is not None:
+        gid1 = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom1)
+        if gid1 == -1:
+            raise ValueError(f"Geom '{geom1}' not found in model")
+        avg_solref = model.geom_solref[gid1].tolist()
+        avg_solimp = model.geom_solimp[gid1].tolist()
+        avg_friction = model.geom_friction[gid1].tolist()
+    elif model.ngeom > 0:
         avg_solref = model.geom_solref.mean(axis=0).tolist()
         avg_solimp = model.geom_solimp.mean(axis=0).tolist()
         avg_friction = model.geom_friction.mean(axis=0).tolist()
@@ -300,8 +307,8 @@ async def suggest_contact_params(
 
     Args:
         sim_name: Slot name (default slot if None).
-        geom1: Optional geom name for pair-specific analysis.
-        geom2: Optional geom name for pair-specific analysis.
+        geom1: Optional geom name to analyse that geom's specific contact params instead of the global average.
+        geom2: Reserved for future pair-specific analysis (currently ignored if geom1 is set).
 
     Returns:
         JSON: {"current": {...}, "issues": [{...}], "recommended": {"conservative": {...}, "stiff": {...}}}

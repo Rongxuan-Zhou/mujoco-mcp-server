@@ -225,3 +225,15 @@ def test_suggest_contact_params_stiff_not_looser_than_conservative():
     # Both must be >= 2*timestep; stiff has shorter time constant (tighter) = smaller or equal
     assert stiff_solref0 >= 2 * timestep
     assert stiff_solref0 <= conservative_solref0
+
+
+def test_suggest_contact_params_invalid_geom_raises():
+    from mujoco_mcp.tools.diagnostics import suggest_contact_params_impl
+    model = mujoco.MjModel.from_xml_string(TIGHT_SOLREF_XML)
+    data = mujoco.MjData(model)
+    # Invalid geom name should raise ValueError (caught by @safe_tool in MCP context)
+    try:
+        suggest_contact_params_impl(model, data, geom1="nonexistent_geom")
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "nonexistent_geom" in str(e)
