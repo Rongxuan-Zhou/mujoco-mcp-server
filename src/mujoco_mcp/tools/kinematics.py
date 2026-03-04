@@ -58,6 +58,8 @@ def _clamp_joint_limits(model: mujoco.MjModel, data: mujoco.MjData) -> None:
         jtype = int(model.jnt_type[jid])
         if jtype == mujoco.mjtJoint.mjJNT_FREE:
             continue
+        if jtype == mujoco.mjtJoint.mjJNT_BALL:
+            continue
         qadr = int(model.jnt_qposadr[jid])
         lo, hi = model.jnt_range[jid]
         data.qpos[qadr] = float(np.clip(data.qpos[qadr], lo, hi))
@@ -108,7 +110,7 @@ def solve_ik_impl(
 
         if float(np.linalg.norm(err_pos)) < tol:
             converged = True
-            iterations = step
+            iterations = step + 1
             break
 
         mujoco.mj_jacSite(model, data, jacp, jacr, site_id)
