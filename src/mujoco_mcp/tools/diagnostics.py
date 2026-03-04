@@ -13,8 +13,11 @@ from . import safe_tool
 
 def validate_mjcf_impl(*, xml_path: Optional[str] = None, xml_string: Optional[str] = None) -> str:
     """Core logic for validate_mjcf — testable without MCP context."""
+    if xml_path is not None and xml_string is not None:
+        return json.dumps({"valid": False, "errors": [{"rule": "invalid_input", "element": "args", "message": "Provide xml_path or xml_string, not both"}], "warnings": []})
+
     if xml_path is None and xml_string is None:
-        return json.dumps({"error": "invalid_input", "message": "Provide xml_path or xml_string"})
+        return json.dumps({"valid": False, "errors": [{"rule": "invalid_input", "element": "args", "message": "Provide xml_path or xml_string"}], "warnings": []})
 
     if xml_path is not None:
         with open(xml_path) as f:
@@ -61,7 +64,11 @@ def validate_mjcf_impl(*, xml_path: Optional[str] = None, xml_string: Optional[s
 
     # Check dangling actuator joint/tendon references
     joint_names = {j.get("name") for j in root.iter("joint") if j.get("name")}
-    tendon_names = {t.get("name") for t in root.iter("tendon") if t.get("name")}
+    tendon_names = {
+        t.get("name")
+        for t in root.iter()
+        if t.tag in ("spatial", "fixed") and t.get("name")
+    }
     for act in root.iter():
         if act.tag in ("motor", "position", "velocity", "intvelocity", "damper"):
             ref_joint = act.get("joint")

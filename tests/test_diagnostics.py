@@ -65,6 +65,8 @@ def test_validate_mjcf_missing_geom_size_caught():
     assert result["valid"] is False
     rules = [e["rule"] for e in result["errors"]]
     assert any("size" in r or "mujoco" in r or "geom" in r for r in rules)
+    # Also verify the static warning was emitted
+    assert any("geom_missing_size" in w["rule"] for w in result["warnings"])
 
 
 def test_validate_mjcf_dangling_actuator_caught():
