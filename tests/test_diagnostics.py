@@ -271,7 +271,6 @@ def test_diagnose_instability_velocity_explosion_caught():
     data = mujoco.MjData(model)
     # Manually inject large velocity to trigger check before stepping
     data.qvel[0] = 2000.0
-    mujoco.mj_forward(model, data)
     result = json.loads(diagnose_instability_impl(model, data, n_steps=5))
     assert result["stable"] is False
     assert result["first_unstable_step"] == 0  # detected at step 0 (initial state)
@@ -283,7 +282,6 @@ def test_diagnose_instability_first_unstable_step_reported():
     data = mujoco.MjData(model)
     # Inject instability
     data.qvel[0] = 5000.0
-    mujoco.mj_forward(model, data)
     result = json.loads(diagnose_instability_impl(model, data, n_steps=10))
     assert result["stable"] is False
     assert isinstance(result["first_unstable_step"], int)
