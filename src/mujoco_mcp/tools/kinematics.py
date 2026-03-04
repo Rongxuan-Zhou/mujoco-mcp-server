@@ -93,9 +93,10 @@ def solve_ik_impl(
     jacr = np.zeros((3, model.nv))
 
     converged = False
-    iterations = max_iter
+    iterations = 0
 
     for step in range(max_iter):
+        iterations = step + 1
         mujoco.mj_forward(model, data)
 
         site_pos = data.site_xpos[site_id].copy()
@@ -110,7 +111,6 @@ def solve_ik_impl(
 
         if float(np.linalg.norm(err_pos)) < tol:
             converged = True
-            iterations = step + 1
             break
 
         mujoco.mj_jacSite(model, data, jacp, jacr, site_id)

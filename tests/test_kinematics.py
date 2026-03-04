@@ -1,5 +1,6 @@
 """Tests for Kinematics tool group — solve_ik."""
 import json
+import pytest
 import numpy as np
 import mujoco
 
@@ -88,8 +89,5 @@ def test_solve_ik_joint_names_subset_restricts_motion():
 def test_solve_ik_invalid_site_raises():
     from mujoco_mcp.tools.kinematics import solve_ik_impl
     model, data = _make_arm()
-    try:
+    with pytest.raises(ValueError, match="nonexistent_site"):
         solve_ik_impl(model, data, site_name="nonexistent_site", target_pos=[0.3, 0.0, 0.0])
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "nonexistent_site" in str(e)
