@@ -2,10 +2,10 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![MuJoCo](https://img.shields.io/badge/mujoco-%E2%89%A52.3-green.svg)](https://mujoco.org/)
-[![Tests](https://img.shields.io/badge/tests-99%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-103%20passed-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MuJoCo physics simulation as **56 MCP tools** for [Claude Code](https://claude.ai/code) and other [Model Context Protocol](https://modelcontextprotocol.io) clients — run simulations, render frames, analyze physics, control robots, and sweep parameters directly from your AI assistant.
+MuJoCo physics simulation as **57 MCP tools** for [Claude Code](https://claude.ai/code) and other [Model Context Protocol](https://modelcontextprotocol.io) clients — run simulations, render frames, analyze physics, control robots, and sweep parameters directly from your AI assistant.
 
 ## Requirements
 
@@ -67,6 +67,7 @@ python -m mujoco_mcp --transport streamable-http --host 0.0.0.0 --port 8080
 | **Viewer** | `viewer_open` `viewer_sync` `viewer_close` | Live interactive viewer (requires display) |
 | **Vision** *(optional)* | `analyze_scene` `compare_scenes` `track_object` `render_figure_strip` | Gemini 2.5 Pro scene analysis and trajectory tracking |
 | **Meta** | `server_diagnostics` | Server health, GL backend, and loaded slots |
+| **Kinematics** | `solve_ik` | Damped Least Squares IK for end-effector sites |
 | **Diagnostics** | `validate_mjcf` `model_summary` `suggest_contact_params` `diagnose_instability` | Pre-load XML validation, model overview, contact parameter tuning, instability detection |
 | **Workflow** | `run_and_analyze` `debug_contacts` `evaluate_trajectory` `compare_trajectories` | Composite research workflows |
 
