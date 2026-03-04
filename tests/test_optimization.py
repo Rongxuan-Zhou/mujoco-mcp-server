@@ -75,8 +75,11 @@ def test_ilqr_custom_QR_accepted():
     # Custom Q/R should not raise; controls should differ
     ctrl_default_max = max(abs(u[0]) for u in result_default["controls"])
     ctrl_custom_max = max(abs(u[0]) for u in result_custom["controls"])
-    # Heavy R → smaller controls
-    assert ctrl_custom_max < ctrl_default_max + 5.0  # relaxed, direction check only
+    # Heavy R penalty should produce meaningfully different controls
+    assert abs(ctrl_custom_max - ctrl_default_max) > 1e-6, (
+        f"Heavy R should change control magnitude: "
+        f"default={ctrl_default_max:.4f}, custom={ctrl_custom_max:.4f}"
+    )
 
 
 def test_ilqr_waypoints_subsampled():
