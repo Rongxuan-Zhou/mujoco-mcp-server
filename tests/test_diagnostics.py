@@ -237,3 +237,69 @@ def test_suggest_contact_params_invalid_geom_raises():
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "nonexistent_geom" in str(e)
+
+
+# ---- diagnose_instability tests ----
+
+STABLE_BOX_XML = """
+<mujoco>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="1 1 0.1"/>
+    <body name="box" pos="0 0 0.2">
+      <freejoint/>
+      <inertial mass="1.0" pos="0 0 0" diaginertia="0.01 0.01 0.01"/>
+      <geom type="box" size="0.1 0.1 0.1"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+
+def test_diagnose_instability_stable_model():
+    from mujoco_mcp.tools.diagnostics import diagnose_instability_impl
+    model = mujoco.MjModel.from_xml_string(STABLE_BOX_XML)
+    data = mujoco.MjData(model)
+    result = json.loads(diagnose_instability_impl(model, data, n_steps=50))
+    assert result["stable"] is True
+    assert result["first_unstable_step"] is None
+
+
+def test_diagnose_instability_velocity_explosion_caught():
+    from mujoco_mcp.tools.diagnostics import diagnose_instability_impl
+    model = mujoco.MjModel.from_xml_string(STABLE_BOX_XML)
+    data = mujoco.MjData(model)
+    # Manually inject large velocity to trigger check before stepping
+    data.qvel[0] = 2000.0
+    mujoco.mj_forward(model, data)
+    result = json.loads(diagnose_instability_impl(model, data, n_steps=5))
+    assert result["stable"] is False
+    assert result["first_unstable_step"] == 0  # detected at step 0 (initial state)
+
+
+def test_diagnose_instability_first_unstable_step_reported():
+    from mujoco_mcp.tools.diagnostics import diagnose_instability_impl
+    model = mujoco.MjModel.from_xml_string(STABLE_BOX_XML)
+    data = mujoco.MjData(model)
+    # Inject instability
+    data.qvel[0] = 5000.0
+    mujoco.mj_forward(model, data)
+    result = json.loads(diagnose_instability_impl(model, data, n_steps=10))
+    assert result["stable"] is False
+    assert isinstance(result["first_unstable_step"], int)
+    assert result["first_unstable_step"] >= 0
+
+
+def test_diagnose_instability_result_schema():
+    from mujoco_mcp.tools.diagnostics import diagnose_instability_impl
+    model = mujoco.MjModel.from_xml_string(STABLE_BOX_XML)
+    data = mujoco.MjData(model)
+    result = json.loads(diagnose_instability_impl(model, data, n_steps=10))
+    # All required keys present
+    assert "stable" in result
+    assert "steps_run" in result
+    assert "first_unstable_step" in result
+    assert "issues" in result
+    assert "suggestions" in result
+    assert isinstance(result["issues"], list)
+    assert isinstance(result["suggestions"], list)

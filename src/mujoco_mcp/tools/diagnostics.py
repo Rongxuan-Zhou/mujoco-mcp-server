@@ -1,6 +1,7 @@
 """Diagnostics tool group — XML validation, model summary, contact params, instability detection."""
 from __future__ import annotations
 
+import asyncio
 import json
 import xml.etree.ElementTree as ET
 import mujoco
@@ -8,6 +9,8 @@ import numpy as np
 
 from .._registry import mcp
 from . import safe_tool
+from ..constants import ASYNC_YIELD_INTERVAL
+from ..compat import ensure_energy, restore_energy
 
 
 def validate_mjcf_impl(*, xml_path: str | None = None, xml_string: str | None = None) -> str:
@@ -250,6 +253,112 @@ def suggest_contact_params_impl(
     return json.dumps({"current": current, "issues": issues, "recommended": recommended})
 
 
+def _read_energy(model: mujoco.MjModel, data: mujoco.MjData) -> float:
+    """Read total mechanical energy; requires mjENBL_ENERGY to already be enabled."""
+    return abs(float(data.energy[0]) + float(data.energy[1]))
+
+
+def diagnose_instability_impl(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    n_steps: int = 100,
+) -> str:
+    """Core logic for diagnose_instability — testable without MCP context."""
+    issues: list[dict] = []
+    first_unstable_step: int | None = None
+
+    # Enable mjENBL_ENERGY so mj_forward/mj_step populates data.energy
+    was_energy_enabled = ensure_energy(model)
+    try:
+        # Initial energy baseline (mj_forward recomputes energy with flag enabled)
+        mujoco.mj_forward(model, data)
+        initial_energy = _read_energy(model, data)
+        if initial_energy < 1e-10:
+            initial_energy = 1e-10  # prevent division by zero
+
+        # Check initial state before stepping
+        if data.qvel.size > 0:
+            max_vel = float(np.max(np.abs(data.qvel)))
+            if max_vel > 1000.0:
+                first_unstable_step = 0
+                dof_idx = int(np.argmax(np.abs(data.qvel)))
+                issues.append({
+                    "step": 0,
+                    "type": "velocity_explosion",
+                    "body": f"dof_{dof_idx}",
+                    "value": max_vel,
+                })
+
+        # Step simulation
+        for step in range(n_steps):
+            mujoco.mj_step(model, data)
+
+            # Check qvel explosion
+            if data.qvel.size > 0:
+                max_vel = float(np.max(np.abs(data.qvel)))
+                if max_vel > 1000.0 and first_unstable_step is None:
+                    first_unstable_step = step
+                    dof_idx = int(np.argmax(np.abs(data.qvel)))
+                    issues.append({
+                        "step": step,
+                        "type": "velocity_explosion",
+                        "body": f"dof_{dof_idx}",
+                        "value": max_vel,
+                    })
+
+            # Check NaN/Inf in qacc
+            if np.any(~np.isfinite(data.qacc)):
+                if first_unstable_step is None:
+                    first_unstable_step = step
+                issues.append({
+                    "step": step,
+                    "type": "nan_inf_acceleration",
+                    "body": "unknown",
+                    "value": float("nan"),
+                })
+                break  # no point continuing
+
+            # Check energy injection (every 10 steps to save compute)
+            if step % 10 == 9:
+                current_energy = _read_energy(model, data)
+                if current_energy > 10.0 * initial_energy and first_unstable_step is None:
+                    first_unstable_step = step
+                    issues.append({
+                        "step": step,
+                        "type": "energy_explosion",
+                        "body": "global",
+                        "value": current_energy / initial_energy,
+                    })
+    finally:
+        restore_energy(model, was_energy_enabled)
+
+    stable = first_unstable_step is None and len(issues) == 0
+
+    # Build deduplicated suggestions
+    seen_suggestions: set[str] = set()
+    suggestions: list[str] = []
+    for issue in issues:
+        if issue["type"] == "velocity_explosion":
+            s = "Reduce timestep or add joint damping to prevent velocity explosion."
+        elif issue["type"] == "nan_inf_acceleration":
+            s = "NaN detected — check for degenerate geometry or extreme forces."
+        elif issue["type"] == "energy_explosion":
+            s = "Energy growing — try solref[0] >= 10×timestep or reduce timestep."
+        else:
+            continue
+        if s not in seen_suggestions:
+            seen_suggestions.add(s)
+            suggestions.append(s)
+
+    return json.dumps({
+        "stable": stable,
+        "steps_run": n_steps,
+        "first_unstable_step": first_unstable_step,
+        "issues": issues[:20],  # cap output
+        "suggestions": suggestions,
+    })
+
+
 @mcp.tool()
 @safe_tool
 async def validate_mjcf(
@@ -316,3 +425,96 @@ async def suggest_contact_params(
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
     return suggest_contact_params_impl(slot.model, slot.data, geom1, geom2)
+
+
+@mcp.tool()
+@safe_tool
+async def diagnose_instability(ctx, sim_name: str | None = None, n_steps: int = 100) -> str:
+    """Run a short simulation window and detect numerical instability signals.
+
+    Detection criteria:
+    - |qvel| > 1000 rad/s or m/s → velocity explosion
+    - NaN or Inf in qacc → divergence
+    - Energy increases by >10× → energy injection (timestep too large or stiff contact)
+
+    Args:
+        sim_name: Slot name (default slot if None).
+        n_steps: Number of steps to run (default 100, max 10000).
+
+    Returns:
+        JSON: {"stable": bool, "steps_run": int, "first_unstable_step": int|null,
+               "issues": [{...}], "suggestions": [str]}
+    """
+    n_steps = min(n_steps, 10000)
+    mgr = ctx.request_context.lifespan_context.sim_manager
+    slot = mgr.get(sim_name)
+    model, data = slot.model, slot.data
+
+    issues: list[dict] = []
+    first_unstable_step: int | None = None
+
+    was_energy_enabled = ensure_energy(model)
+    try:
+        mujoco.mj_forward(model, data)
+        initial_energy = _read_energy(model, data)
+        if initial_energy < 1e-10:
+            initial_energy = 1e-10
+
+        # Check initial state
+        if data.qvel.size > 0:
+            max_vel = float(np.max(np.abs(data.qvel)))
+            if max_vel > 1000.0:
+                first_unstable_step = 0
+                dof_idx = int(np.argmax(np.abs(data.qvel)))
+                issues.append({"step": 0, "type": "velocity_explosion", "body": f"dof_{dof_idx}", "value": max_vel})
+
+        for step in range(n_steps):
+            if step % ASYNC_YIELD_INTERVAL == 0:
+                await asyncio.sleep(0)
+
+            mujoco.mj_step(model, data)
+
+            if data.qvel.size > 0:
+                max_vel = float(np.max(np.abs(data.qvel)))
+                if max_vel > 1000.0 and first_unstable_step is None:
+                    first_unstable_step = step
+                    dof_idx = int(np.argmax(np.abs(data.qvel)))
+                    issues.append({"step": step, "type": "velocity_explosion", "body": f"dof_{dof_idx}", "value": max_vel})
+
+            if np.any(~np.isfinite(data.qacc)):
+                if first_unstable_step is None:
+                    first_unstable_step = step
+                issues.append({"step": step, "type": "nan_inf_acceleration", "body": "unknown", "value": float("nan")})
+                break
+
+            if step % 10 == 9:
+                current_energy = _read_energy(model, data)
+                if current_energy > 10.0 * initial_energy and first_unstable_step is None:
+                    first_unstable_step = step
+                    issues.append({"step": step, "type": "energy_explosion", "body": "global", "value": current_energy / initial_energy})
+    finally:
+        restore_energy(model, was_energy_enabled)
+
+    stable = first_unstable_step is None and len(issues) == 0
+    seen_suggestions: set[str] = set()
+    suggestions: list[str] = []
+    for issue in issues:
+        if issue["type"] == "velocity_explosion":
+            s = "Reduce timestep or add joint damping to prevent velocity explosion."
+        elif issue["type"] == "nan_inf_acceleration":
+            s = "NaN detected — check for degenerate geometry or extreme forces."
+        elif issue["type"] == "energy_explosion":
+            s = "Energy growing — try solref[0] >= 10×timestep or reduce timestep."
+        else:
+            continue
+        if s not in seen_suggestions:
+            seen_suggestions.add(s)
+            suggestions.append(s)
+
+    return json.dumps({
+        "stable": stable,
+        "steps_run": n_steps,
+        "first_unstable_step": first_unstable_step,
+        "issues": issues[:20],
+        "suggestions": suggestions,
+    })
