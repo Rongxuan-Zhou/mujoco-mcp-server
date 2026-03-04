@@ -92,3 +92,58 @@ def test_validate_mjcf_both_args_rejected():
     assert result["errors"][0]["rule"] == "invalid_input"
     assert "not both" in result["errors"][0]["message"]
     assert result["warnings"] == []
+
+
+# ---- model_summary tests ----
+
+BOX_DROP_XML = """
+<mujoco>
+  <option timestep="0.002"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="1 1 0.1"/>
+    <body name="box" pos="0 0 1">
+      <freejoint name="box_joint"/>
+      <inertial mass="1.0" pos="0 0 0" diaginertia="0.01 0.01 0.01"/>
+      <geom name="box_geom" type="box" size="0.1 0.1 0.1"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+
+def _load_box_model():
+    model = mujoco.MjModel.from_xml_string(BOX_DROP_XML)
+    data = mujoco.MjData(model)
+    return model, data
+
+
+def test_model_summary_correct_nq_nv_nu():
+    from mujoco_mcp.tools.diagnostics import model_summary_impl
+    model, data = _load_box_model()
+    result = json.loads(model_summary_impl(model, data))
+    assert result["nq"] == 7   # freejoint = 7 qpos (quaternion)
+    assert result["nv"] == 6   # freejoint = 6 DOF
+    assert result["nu"] == 0   # no actuators
+
+
+def test_model_summary_joint_names_present():
+    from mujoco_mcp.tools.diagnostics import model_summary_impl
+    model, data = _load_box_model()
+    result = json.loads(model_summary_impl(model, data))
+    joint_names = [j["name"] for j in result["joints"]]
+    assert "box_joint" in joint_names
+
+
+def test_model_summary_mass_extremes_reported():
+    from mujoco_mcp.tools.diagnostics import model_summary_impl
+    model, data = _load_box_model()
+    result = json.loads(model_summary_impl(model, data))
+    assert "heaviest_body" in result
+    assert result["heaviest_body"]["mass"] >= 1.0
+
+
+def test_model_summary_timestep_present():
+    from mujoco_mcp.tools.diagnostics import model_summary_impl
+    model, data = _load_box_model()
+    result = json.loads(model_summary_impl(model, data))
+    assert abs(result["timestep"] - 0.002) < 1e-9

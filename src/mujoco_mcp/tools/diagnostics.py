@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import xml.etree.ElementTree as ET
 import mujoco
+import numpy as np
 
 from .._registry import mcp
 from . import safe_tool
@@ -98,6 +99,65 @@ def validate_mjcf_impl(*, xml_path: str | None = None, xml_string: str | None = 
     return json.dumps({"valid": len(errors) == 0, "errors": errors, "warnings": warnings})
 
 
+def model_summary_impl(model: mujoco.MjModel, data: mujoco.MjData) -> str:
+    """Core logic for model_summary — testable without MCP context."""
+    summary: dict = {
+        "nq": model.nq,
+        "nv": model.nv,
+        "nu": model.nu,
+        "nbody": model.nbody,
+        "ngeom": model.ngeom,
+        "njnt": model.njnt,
+        "nsensor": model.nsensor,
+        "ntendon": model.ntendon,
+        "nactuator": model.nu,
+        "timestep": float(model.opt.timestep),
+        "integrator": int(model.opt.integrator),
+        "solver": int(model.opt.solver),
+    }
+
+    # Per-joint info (first 20)
+    joints = []
+    n_joints = min(model.njnt, 20)
+    for i in range(n_joints):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i) or f"joint_{i}"
+        jtype = int(model.jnt_type[i])
+        jrange = model.jnt_range[i].tolist()
+        damping_idx = int(model.jnt_dofadr[i])
+        damping = float(model.dof_damping[damping_idx]) if damping_idx < model.nv else 0.0
+        joints.append({"name": name, "type": jtype, "range": jrange, "damping": damping})
+    summary["joints"] = joints
+
+    # Per-actuator info (first 20)
+    actuators = []
+    n_act = min(model.nu, 20)
+    for i in range(n_act):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or f"act_{i}"
+        ctrl_range = model.actuator_ctrlrange[i].tolist()
+        gear = float(model.actuator_gear[i, 0])
+        actuators.append({"name": name, "ctrl_range": ctrl_range, "gear": gear})
+    summary["actuators"] = actuators
+
+    # Mass extremes (skip worldbody at index 0)
+    if model.nbody > 1:
+        masses = model.body_mass[1:]  # skip world
+        body_names = [
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, i + 1) or f"body_{i+1}"
+            for i in range(len(masses))
+        ]
+        heaviest_idx = int(np.argmax(masses))
+        lightest_idx = int(np.argmin(masses))
+        summary["heaviest_body"] = {"name": body_names[heaviest_idx], "mass": float(masses[heaviest_idx])}
+        summary["lightest_body"] = {"name": body_names[lightest_idx], "mass": float(masses[lightest_idx])}
+        if masses[heaviest_idx] > 0 and masses[lightest_idx] > 0:
+            summary["mass_ratio"] = float(masses[heaviest_idx] / masses[lightest_idx])
+    else:
+        summary["heaviest_body"] = None
+        summary["lightest_body"] = None
+
+    return json.dumps(summary)
+
+
 @mcp.tool()
 @safe_tool
 async def validate_mjcf(
@@ -118,3 +178,22 @@ async def validate_mjcf(
                "warnings": [...]}
     """
     return validate_mjcf_impl(xml_path=xml_path, xml_string=xml_string)
+
+
+@mcp.tool()
+@safe_tool
+async def model_summary(ctx, sim_name: str | None = None) -> str:
+    """Compact structural overview of a loaded model.
+
+    Returns nq/nv/nu, body/geom/joint/sensor counts, timestep, solver type,
+    per-joint details (first 20), per-actuator details (first 20), and mass extremes.
+
+    Args:
+        sim_name: Slot name (default slot if None).
+
+    Returns:
+        JSON: Structured model summary with ~40 fields.
+    """
+    mgr = ctx.request_context.lifespan_context.sim_manager
+    slot = mgr.get(sim_name)
+    return model_summary_impl(slot.model, slot.data)
