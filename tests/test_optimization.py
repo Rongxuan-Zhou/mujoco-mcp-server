@@ -76,6 +76,10 @@ def test_ilqr_custom_QR_accepted():
     # Custom Q/R should not raise; controls should differ
     ctrl_default_max = max(abs(u[0]) for u in result_default["controls"])
     ctrl_custom_max = max(abs(u[0]) for u in result_custom["controls"])
+    # Ensure default scenario produced non-zero controls (line search didn't fail)
+    assert ctrl_default_max > 1e-6, (
+        f"Default scenario produced near-zero controls: {ctrl_default_max:.4e}"
+    )
     # Heavy R penalty should produce smaller control magnitude
     assert ctrl_custom_max < ctrl_default_max, (
         f"Heavy R should reduce control magnitude: "
@@ -159,4 +163,32 @@ def test_unknown_template_raises():
             horizon=10, max_iter=5,
             template="unknown_template",
             Q_user=None, R_user=None,
+        )
+
+
+def test_q_without_r_raises():
+    """Supplying Q without R must raise ValueError."""
+    model, data = _make_slider()
+    with pytest.raises(ValueError, match="R must be provided"):
+        _ilqr_impl(
+            model, data,
+            start_qpos=[0.0], goal_qpos=[0.5],
+            horizon=10, max_iter=5,
+            template="reach",
+            Q_user=[[1.0, 0.0], [0.0, 1.0]],
+            R_user=None,
+        )
+
+
+def test_mppi_nonpositive_temperature_raises():
+    """temperature <= 0 must raise ValueError."""
+    model, data = _make_slider()
+    with pytest.raises(ValueError, match="temperature"):
+        _mppi_impl(
+            model, data,
+            start_qpos=[0.0], goal_qpos=[0.5],
+            horizon=10, n_samples=5,
+            temperature=0.0,
+            noise_sigma=1.0, max_iter=2,
+            template="reach", Q_user=None, R_user=None,
         )

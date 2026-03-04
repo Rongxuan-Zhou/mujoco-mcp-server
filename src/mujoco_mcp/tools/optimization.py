@@ -1,10 +1,12 @@
 """Optimization tool group — iLQR and MPPI trajectory optimization."""
 from __future__ import annotations
 
+import asyncio
 import json
 
 import numpy as np
 import mujoco
+from mcp.server.fastmcp import Context
 
 from .._registry import mcp
 from . import safe_tool
@@ -36,6 +38,8 @@ def _build_cost_matrices(
     nu = model.nu
 
     if Q_user is not None:
+        if R_user is None:
+            raise ValueError("R must be provided when Q is provided")
         Q = np.array(Q_user, dtype=float)
         R = np.array(R_user, dtype=float)
         if Q.shape != (2 * nv, 2 * nv):
@@ -83,6 +87,26 @@ def _state_err(
     return np.concatenate([dq, qvel])
 
 
+def _apply_ctrl(u: np.ndarray, model: mujoco.MjModel) -> np.ndarray:
+    """Clip control to actuator range, respecting ctrllimited flag.
+
+    Handles both 1D (nu,) single-step and 2D (horizon, nu) batch arrays.
+    Actuators without ctrllimited=True have ctrlrange=[0,0] by default;
+    clipping them unconditionally would silently zero all controls.
+    """
+    ctrl = u.copy()
+    limited = model.actuator_ctrllimited.astype(bool)
+    if not np.any(limited):
+        return ctrl
+    lo = model.actuator_ctrlrange[:, 0]
+    hi = model.actuator_ctrlrange[:, 1]
+    if ctrl.ndim == 1:
+        ctrl[limited] = np.clip(ctrl[limited], lo[limited], hi[limited])
+    else:
+        ctrl[:, limited] = np.clip(ctrl[:, limited], lo[limited], hi[limited])
+    return ctrl
+
+
 def _rollout(
     model: mujoco.MjModel,
     start_qpos: np.ndarray,
@@ -98,9 +122,6 @@ def _rollout(
     Returns:
         (qpos_traj, qvel_traj) each of shape (horizon+1, nq/nv).
     """
-    ctrl_lo = model.actuator_ctrlrange[:, 0]
-    ctrl_hi = model.actuator_ctrlrange[:, 1]
-
     d = mujoco.MjData(model)
     d.qpos[:] = start_qpos
     d.qvel[:] = 0.0
@@ -109,7 +130,7 @@ def _rollout(
     qpos_list = [d.qpos.copy()]
     qvel_list = [d.qvel.copy()]
     for u in controls:
-        d.ctrl[:] = np.clip(u, ctrl_lo, ctrl_hi)
+        d.ctrl[:] = _apply_ctrl(u, model)
         mujoco.mj_step(model, d)
         qpos_list.append(d.qpos.copy())
         qvel_list.append(d.qvel.copy())
@@ -171,8 +192,6 @@ def _ilqr_impl(
     Q, R, Qf = _build_cost_matrices(model, template, Q_user, R_user)
     start_qpos = np.array(start_qpos, dtype=float)
     goal_qpos = np.array(goal_qpos, dtype=float)
-    ctrl_lo = model.actuator_ctrlrange[:, 0]
-    ctrl_hi = model.actuator_ctrlrange[:, 1]
 
     U = np.zeros((horizon, nu))
     converged = False
@@ -190,7 +209,7 @@ def _ilqr_impl(
             d = mujoco.MjData(model)
             d.qpos[:] = qpos_bar[t]
             d.qvel[:] = qvel_bar[t]
-            d.ctrl[:] = np.clip(U[t], ctrl_lo, ctrl_hi)
+            d.ctrl[:] = _apply_ctrl(U[t], model)
             mujoco.mj_forward(model, d)
             A = np.zeros((2 * nv, 2 * nv))
             B = np.zeros((2 * nv, nu))
@@ -259,7 +278,7 @@ def _ilqr_impl(
                 dx = np.concatenate([dpos, qvel_new[-1] - qvel_bar[t]])
 
                 du = alpha * k_list[t] + K_list[t] @ dx
-                U_cand[t] = np.clip(U[t] + du, ctrl_lo, ctrl_hi)
+                U_cand[t] = _apply_ctrl(U[t] + du, model)
                 d_fwd.ctrl[:] = U_cand[t]
                 mujoco.mj_step(model, d_fwd)
                 qpos_new.append(d_fwd.qpos.copy())
@@ -300,7 +319,7 @@ def _ilqr_impl(
 @mcp.tool()
 @safe_tool
 async def optimize_ilqr(
-    ctx,
+    ctx: Context,
     start_qpos: list[float],
     goal_qpos: list[float],
     horizon: int = 50,
@@ -330,6 +349,7 @@ async def optimize_ilqr(
     """
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
+    await asyncio.sleep(0)
     return _ilqr_impl(
         slot.model, slot.data,
         start_qpos=start_qpos,
@@ -363,14 +383,15 @@ def _mppi_impl(
     Samples K perturbed control sequences, computes costs, and updates
     the nominal control via temperature-weighted average.
     """
+    if temperature <= 0.0:
+        raise ValueError(f"temperature must be positive, got {temperature}")
+
     nv = model.nv
     nu = model.nu
 
     Q, R, Qf = _build_cost_matrices(model, template, Q_user, R_user)
     start_qpos = np.array(start_qpos, dtype=float)
     goal_qpos = np.array(goal_qpos, dtype=float)
-    ctrl_lo = model.actuator_ctrlrange[:, 0]
-    ctrl_hi = model.actuator_ctrlrange[:, 1]
 
     def rollout_cost(controls: np.ndarray) -> float:
         d = mujoco.MjData(model)
@@ -381,7 +402,7 @@ def _mppi_impl(
         for u in controls:
             xe = _state_err(model, d.qpos.copy(), d.qvel.copy(), goal_qpos)
             cost += float(xe @ Q @ xe + u @ R @ u)
-            d.ctrl[:] = np.clip(u, ctrl_lo, ctrl_hi)
+            d.ctrl[:] = _apply_ctrl(u, model)
             mujoco.mj_step(model, d)
         xe_T = _state_err(model, d.qpos.copy(), d.qvel.copy(), goal_qpos)
         cost += float(xe_T @ Qf @ xe_T)
@@ -396,14 +417,18 @@ def _mppi_impl(
         noise = np.random.randn(n_samples, horizon, nu) * noise_sigma
         costs = np.zeros(n_samples)
         for k in range(n_samples):
-            U_k = np.clip(U + noise[k], ctrl_lo, ctrl_hi)
+            U_k = _apply_ctrl(U + noise[k], model)
             costs[k] = rollout_cost(U_k)
 
         beta = float(np.min(costs))
         weights = np.exp(-(costs - beta) / temperature)
-        weights /= np.sum(weights)
+        w_sum = float(np.sum(weights))
+        if w_sum < 1e-300 or not np.isfinite(w_sum):
+            weights = np.ones(n_samples) / n_samples
+        else:
+            weights /= w_sum
         U += np.sum(weights[:, np.newaxis, np.newaxis] * noise, axis=0)
-        U = np.clip(U, ctrl_lo, ctrl_hi)
+        U = _apply_ctrl(U, model)
 
     # Final rollout
     qpos_final, qvel_final = _rollout(model, start_qpos, U)
@@ -424,7 +449,7 @@ def _mppi_impl(
 @mcp.tool()
 @safe_tool
 async def optimize_mppi(
-    ctx,
+    ctx: Context,
     start_qpos: list[float],
     goal_qpos: list[float],
     horizon: int = 20,
@@ -461,6 +486,7 @@ async def optimize_mppi(
     """
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
+    await asyncio.sleep(0)
     return _mppi_impl(
         slot.model, slot.data,
         start_qpos=start_qpos,
