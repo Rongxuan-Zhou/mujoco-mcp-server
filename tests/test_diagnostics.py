@@ -83,3 +83,12 @@ def test_validate_mjcf_duplicate_name_caught():
     assert result["valid"] is False
     rules = [e["rule"] for e in result["errors"]]
     assert any("duplicate" in r for r in rules)
+
+
+def test_validate_mjcf_both_args_rejected():
+    from mujoco_mcp.tools.diagnostics import validate_mjcf_impl
+    result = json.loads(validate_mjcf_impl(xml_path="/some/path.xml", xml_string="<mujoco/>"))
+    assert result["valid"] is False
+    assert result["errors"][0]["rule"] == "invalid_input"
+    assert "not both" in result["errors"][0]["message"]
+    assert result["warnings"] == []
