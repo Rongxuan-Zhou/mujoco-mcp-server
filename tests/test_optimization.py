@@ -29,6 +29,7 @@ SLIDER_XML = """
 def _make_slider():
     model = mujoco.MjModel.from_xml_string(SLIDER_XML)
     data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
     return model, data
 
 
@@ -75,9 +76,9 @@ def test_ilqr_custom_QR_accepted():
     # Custom Q/R should not raise; controls should differ
     ctrl_default_max = max(abs(u[0]) for u in result_default["controls"])
     ctrl_custom_max = max(abs(u[0]) for u in result_custom["controls"])
-    # Heavy R penalty should produce meaningfully different controls
-    assert abs(ctrl_custom_max - ctrl_default_max) > 1e-6, (
-        f"Heavy R should change control magnitude: "
+    # Heavy R penalty should produce smaller control magnitude
+    assert ctrl_custom_max < ctrl_default_max, (
+        f"Heavy R should reduce control magnitude: "
         f"default={ctrl_default_max:.4f}, custom={ctrl_custom_max:.4f}"
     )
 
