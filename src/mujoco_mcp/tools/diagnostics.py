@@ -161,6 +161,88 @@ def model_summary_impl(model: mujoco.MjModel, data: mujoco.MjData) -> str:
     return json.dumps(summary)
 
 
+def suggest_contact_params_impl(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    geom1: str | None = None,
+    geom2: str | None = None,
+) -> str:
+    """Core logic for suggest_contact_params — testable without MCP context."""
+    timestep = float(model.opt.timestep)
+    issues: list[dict] = []
+
+    # Read global default contact params (average over all geoms)
+    if model.ngeom > 0:
+        avg_solref = model.geom_solref.mean(axis=0).tolist()
+        avg_solimp = model.geom_solimp.mean(axis=0).tolist()
+        avg_friction = model.geom_friction.mean(axis=0).tolist()
+    else:
+        avg_solref = [0.02, 1.0]
+        avg_solimp = [0.9, 0.95, 0.001, 0.5, 2.0]
+        avg_friction = [1.0, 0.005, 0.0001]
+
+    current = {
+        "solref": avg_solref,
+        "solimp": avg_solimp,
+        "friction": avg_friction,
+        "timestep": timestep,
+    }
+
+    # Rule 1: solref[0] (time constant) must be >= 2 * timestep
+    if avg_solref[0] < 2 * timestep:
+        issues.append({
+            "type": "solref_too_tight",
+            "message": (
+                f"solref[0]={avg_solref[0]:.4f} < 2×timestep={2*timestep:.4f}. "
+                "Contact stiffness exceeds solver capability → oscillation or explosion."
+            ),
+            "fix": f"Set solref[0] >= {2*timestep:.4f}",
+        })
+
+    # Rule 2: solref[1] (damping ratio) < 1.0 → underdamped
+    if avg_solref[1] < 1.0:
+        issues.append({
+            "type": "underdamped_contact",
+            "message": f"solref[1]={avg_solref[1]:.3f} < 1.0 → underdamped contact → bouncing artifacts.",
+            "fix": "Set solref[1] >= 1.0",
+        })
+
+    # Rule 3: friction = 0 likely missing
+    if avg_friction[0] < 1e-6:
+        issues.append({
+            "type": "zero_friction",
+            "message": "friction[0]=0.0 → objects will slide freely. Likely missing friction definition.",
+            "fix": "Set friction to [1.0, 0.005, 0.0001] or similar",
+        })
+
+    # Rule 4: friction > 10 likely erroneous
+    if avg_friction[0] > 10.0:
+        issues.append({
+            "type": "extreme_friction",
+            "message": f"friction[0]={avg_friction[0]:.2f} > 10.0 → unusually high, likely erroneous.",
+            "fix": "Typical friction is 0.5–2.0 for rigid bodies",
+        })
+
+    # Conservative preset: stable-first, soft contact
+    conservative_solref0 = max(10 * timestep, 0.02)
+    recommended = {
+        "conservative": {
+            "solref": [conservative_solref0, 1.0],
+            "solimp": [0.9, 0.95, 0.001, 0.5, 2.0],
+            "friction": [1.0, 0.005, 0.0001],
+            "note": "Stable-first. Good for RL training.",
+        },
+        "stiff": {
+            "solref": [max(2 * timestep, 0.004), 1.0],
+            "solimp": [0.95, 0.99, 0.0005, 0.5, 2.0],
+            "friction": [1.0, 0.005, 0.0001],
+            "note": "Precision-first, tighter tolerances. Good for MPC/manipulation.",
+        },
+    }
+
+    return json.dumps({"current": current, "issues": issues, "recommended": recommended})
+
+
 @mcp.tool()
 @safe_tool
 async def validate_mjcf(
@@ -200,3 +282,30 @@ async def model_summary(ctx, sim_name: str | None = None) -> str:
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
     return model_summary_impl(slot.model, slot.data)
+
+
+@mcp.tool()
+@safe_tool
+async def suggest_contact_params(
+    ctx,
+    sim_name: str | None = None,
+    geom1: str | None = None,
+    geom2: str | None = None,
+) -> str:
+    """Analyse contact solver configuration and recommend adjustments.
+
+    Checks solref time constant vs timestep, damping ratio, friction values.
+    Returns current values, flagged issues, and two preset recommendations:
+    'conservative' (RL training) and 'stiff' (MPC/manipulation).
+
+    Args:
+        sim_name: Slot name (default slot if None).
+        geom1: Optional geom name for pair-specific analysis.
+        geom2: Optional geom name for pair-specific analysis.
+
+    Returns:
+        JSON: {"current": {...}, "issues": [{...}], "recommended": {"conservative": {...}, "stiff": {...}}}
+    """
+    mgr = ctx.request_context.lifespan_context.sim_manager
+    slot = mgr.get(sim_name)
+    return suggest_contact_params_impl(slot.model, slot.data, geom1, geom2)

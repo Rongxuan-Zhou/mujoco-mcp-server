@@ -147,3 +147,81 @@ def test_model_summary_timestep_present():
     model, data = _load_box_model()
     result = json.loads(model_summary_impl(model, data))
     assert abs(result["timestep"] - 0.002) < 1e-9
+
+
+# ---- suggest_contact_params tests ----
+
+TIGHT_SOLREF_XML = """
+<mujoco>
+  <option timestep="0.002"/>
+  <default>
+    <geom solref="0.001 1.0" solimp="0.9 0.95 0.001 0.5 2.0" friction="1.0 0.005 0.0001"/>
+  </default>
+  <worldbody>
+    <geom name="floor" type="plane" size="1 1 0.1"/>
+    <body name="box" pos="0 0 1">
+      <freejoint/>
+      <inertial mass="1.0" pos="0 0 0" diaginertia="0.01 0.01 0.01"/>
+      <geom type="box" size="0.1 0.1 0.1"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+ZERO_FRICTION_XML = """
+<mujoco>
+  <option timestep="0.002"/>
+  <default>
+    <geom solref="0.02 1.0" solimp="0.9 0.95 0.001 0.5 2.0" friction="0.0 0.0 0.0"/>
+  </default>
+  <worldbody>
+    <geom name="floor" type="plane" size="1 1 0.1"/>
+    <body name="box" pos="0 0 1">
+      <freejoint/>
+      <inertial mass="1.0" pos="0 0 0" diaginertia="0.01 0.01 0.01"/>
+      <geom type="box" size="0.1 0.1 0.1"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+
+def test_suggest_contact_params_tight_solref_flagged():
+    from mujoco_mcp.tools.diagnostics import suggest_contact_params_impl
+    model = mujoco.MjModel.from_xml_string(TIGHT_SOLREF_XML)
+    data = mujoco.MjData(model)
+    result = json.loads(suggest_contact_params_impl(model, data))
+    issue_types = [i["type"] for i in result["issues"]]
+    assert "solref_too_tight" in issue_types
+
+
+def test_suggest_contact_params_zero_friction_flagged():
+    from mujoco_mcp.tools.diagnostics import suggest_contact_params_impl
+    model = mujoco.MjModel.from_xml_string(ZERO_FRICTION_XML)
+    data = mujoco.MjData(model)
+    result = json.loads(suggest_contact_params_impl(model, data))
+    issue_types = [i["type"] for i in result["issues"]]
+    assert "zero_friction" in issue_types
+
+
+def test_suggest_contact_params_conservative_solref_valid():
+    from mujoco_mcp.tools.diagnostics import suggest_contact_params_impl
+    model = mujoco.MjModel.from_xml_string(TIGHT_SOLREF_XML)
+    data = mujoco.MjData(model)
+    result = json.loads(suggest_contact_params_impl(model, data))
+    timestep = float(model.opt.timestep)
+    conservative_solref0 = result["recommended"]["conservative"]["solref"][0]
+    assert conservative_solref0 >= 2 * timestep
+
+
+def test_suggest_contact_params_stiff_not_looser_than_conservative():
+    from mujoco_mcp.tools.diagnostics import suggest_contact_params_impl
+    model = mujoco.MjModel.from_xml_string(TIGHT_SOLREF_XML)
+    data = mujoco.MjData(model)
+    result = json.loads(suggest_contact_params_impl(model, data))
+    timestep = float(model.opt.timestep)
+    stiff_solref0 = result["recommended"]["stiff"]["solref"][0]
+    conservative_solref0 = result["recommended"]["conservative"]["solref"][0]
+    # Both must be >= 2*timestep; stiff has shorter time constant (tighter) = smaller or equal
+    assert stiff_solref0 >= 2 * timestep
+    assert stiff_solref0 <= conservative_solref0
