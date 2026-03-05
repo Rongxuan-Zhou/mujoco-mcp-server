@@ -29,3 +29,4 @@ packages = ["src/mujoco_mcp"]
 
 [project.optional-dependencies]
 vision = ["google-genai>=1.0,<2.0"]
+media = ["imageio>=2.31", "imageio[ffmpeg]"]
