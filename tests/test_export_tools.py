@@ -137,9 +137,6 @@ def test_plot_data_missing_file():
 
 # ── export_state_log + plot_trajectory tests ──────────────────────────────────
 
-import json as _json_state  # noqa: E402
-import mujoco as _mujoco  # noqa: E402
-
 SENSOR_XML = """
 <mujoco>
   <option timestep="0.01"/>
@@ -174,13 +171,13 @@ CONTACT_XML = """
 
 
 def _make_sensor_traj(n=20):
-    model = _mujoco.MjModel.from_xml_string(SENSOR_XML)
-    data = _mujoco.MjData(model)
-    _mujoco.mj_forward(model, data)
+    model = mujoco.MjModel.from_xml_string(SENSOR_XML)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
     data.ctrl[0] = 5.0
     traj = []
     for _ in range(n):
-        _mujoco.mj_step(model, data)
+        mujoco.mj_step(model, data)
         traj.append({
             "t": data.time,
             "qpos": data.qpos.tolist(),
@@ -191,12 +188,12 @@ def _make_sensor_traj(n=20):
 
 
 def _make_contact_traj(n=30):
-    model = _mujoco.MjModel.from_xml_string(CONTACT_XML)
-    data = _mujoco.MjData(model)
-    _mujoco.mj_forward(model, data)
+    model = mujoco.MjModel.from_xml_string(CONTACT_XML)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
     traj = []
     for _ in range(n):
-        _mujoco.mj_step(model, data)
+        mujoco.mj_step(model, data)
         traj.append({
             "t": data.time,
             "qpos": data.qpos.tolist(),
@@ -212,7 +209,7 @@ def test_export_state_log_qpos_qvel_ctrl(tmp_path):
     from mujoco_mcp.tools.export import _export_state_log_impl
     model, data, traj = _make_sensor_traj()
     out = str(tmp_path / "state.csv")
-    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+    result = json.loads(_export_state_log_impl(model, data, traj, out,
                                                include=["qpos", "qvel", "ctrl"]))
     assert result["ok"] is True
     with open(out) as f:
@@ -228,7 +225,7 @@ def test_export_state_log_body_xpos(tmp_path):
     from mujoco_mcp.tools.export import _export_state_log_impl
     model, data, traj = _make_sensor_traj()
     out = str(tmp_path / "xpos.csv")
-    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+    result = json.loads(_export_state_log_impl(model, data, traj, out,
                                                include=["body_xpos:cart"]))
     assert result["ok"] is True
     with open(out) as f:
@@ -244,7 +241,7 @@ def test_export_state_log_contacts(tmp_path):
     from mujoco_mcp.tools.export import _export_state_log_impl
     model, data, traj = _make_contact_traj()
     out = str(tmp_path / "contacts.csv")
-    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+    result = json.loads(_export_state_log_impl(model, data, traj, out,
                                                include=["contacts"]))
     assert result["ok"] is True
     with open(out) as f:
@@ -259,7 +256,7 @@ def test_export_state_log_sensors(tmp_path):
     from mujoco_mcp.tools.export import _export_state_log_impl
     model, data, traj = _make_sensor_traj()
     out = str(tmp_path / "sensors.csv")
-    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+    result = json.loads(_export_state_log_impl(model, data, traj, out,
                                                include=["sensors"]))
     assert result["ok"] is True
     with open(out) as f:
