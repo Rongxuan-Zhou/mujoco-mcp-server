@@ -2,10 +2,10 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![MuJoCo](https://img.shields.io/badge/mujoco-%E2%89%A52.3-green.svg)](https://mujoco.org/)
-[![Tests](https://img.shields.io/badge/tests-124%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-136%20passed-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MuJoCo physics simulation as **62 MCP tools** for [Claude Code](https://claude.ai/code) and other [Model Context Protocol](https://modelcontextprotocol.io) clients — run simulations, render frames, analyze physics, control robots, and sweep parameters directly from your AI assistant.
+MuJoCo physics simulation as **65 MCP tools** for [Claude Code](https://claude.ai/code) and other [Model Context Protocol](https://modelcontextprotocol.io) clients — run simulations, render frames, analyze physics, control robots, and sweep parameters directly from your AI assistant.
 
 ## Requirements
 
@@ -57,7 +57,8 @@ python -m mujoco_mcp --transport streamable-http --host 0.0.0.0 --port 8080
 | **Analysis** | `analyze_contacts` `analyze_energy` `analyze_forces` `compute_jacobian` `compute_derivatives` `read_sensors` | Contacts, energy, forces, Jacobians, linearized dynamics |
 | **Model** | `modify_model` `reload_from_xml` | In-place parameter edits (no recompile) or full XML reload |
 | **Batch** | `run_sweep` | Parallel parameter sweeps via `ProcessPoolExecutor` |
-| **Export** | `export_csv` `plot_data` | Save trajectories to CSV and plot |
+| **Export** | `export_csv` `plot_data` `export_state_log` `plot_trajectory` | Save trajectories to CSV and plot |
+| **Media** *(optional)* | `export_video` | Render trajectory as MP4 or GIF video |
 | **Spatial** | `scene_map` `body_aabb` `surface_anchor` `compute_placement` | AABB, surface anchors, placement computation |
 | **Menagerie** | `list_menagerie_models` `validate_menagerie_model` `load_menagerie_model` | Download and load 50+ robots from MuJoCo Menagerie |
 | **Control** | `create_controller` `plan_trajectory` `step_controller` `get_controller_state` | PID + min-jerk trajectory for arms/quadrupeds/humanoids |
@@ -72,6 +73,14 @@ python -m mujoco_mcp --transport streamable-http --host 0.0.0.0 --port 8080
 | **Robustness** | `apply_perturbation` `stability_analysis` `randomize_dynamics` | Perturbation robustness analysis and domain randomization |
 | **Diagnostics** | `validate_mjcf` `model_summary` `suggest_contact_params` `diagnose_instability` | Pre-load XML validation, model overview, contact parameter tuning, instability detection |
 | **Workflow** | `run_and_analyze` `debug_contacts` `evaluate_trajectory` `compare_trajectories` | Composite research workflows |
+
+## Optional: Video Export
+
+```bash
+pip install -e ".[media]"
+```
+
+Enables `export_video` — render any recorded trajectory as **MP4** (via `imageio[ffmpeg]`) or **GIF** (via Pillow, no extra deps).
 
 ## Optional: Vision Analysis
 
