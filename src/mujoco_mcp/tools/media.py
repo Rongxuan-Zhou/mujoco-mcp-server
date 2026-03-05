@@ -14,6 +14,40 @@ from .._registry import mcp
 from . import safe_tool
 
 
+def _encode_frames(frames: list, output_path: str, fps: int, fmt: str) -> None:
+    """Encode a list of uint8 RGB arrays to GIF or MP4.
+
+    Args:
+        frames: list of numpy uint8 arrays [H, W, 3].
+        output_path: destination file path.
+        fps: frames per second.
+        fmt: "gif" or "mp4".
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    if fmt == "gif":
+        imgs = [PILImage.fromarray(f) for f in frames]
+        imgs[0].save(
+            output_path,
+            format="GIF",
+            save_all=True,
+            append_images=imgs[1:],
+            duration=max(1, 1000 // fps),
+            loop=0,
+            optimize=False,
+        )
+    else:  # mp4
+        try:
+            import imageio as _imageio  # noqa: PLC0415
+        except ImportError as exc:
+            raise RuntimeError(
+                "MP4 export requires imageio[ffmpeg]. "
+                "Install with: pip install 'mujoco-mcp[media]'"
+            ) from exc
+        with _imageio.get_writer(output_path, fps=fps, macro_block_size=None) as writer:
+            for f in frames:
+                writer.append_data(f)
+
+
 def _export_video_impl(
     model: "mujoco.MjModel",
     data: "mujoco.MjData",
@@ -53,8 +87,7 @@ def _export_video_impl(
             raise ValueError(f"Camera {camera!r} not found in model")
 
     # Use a scratch MjData copy for rendering so the caller's data is never
-    # mutated.  We still call mj_resetData on the original at the end to leave
-    # it in a clean, deterministic state (initial configuration).
+    # mutated.
     render_data = mujoco.MjData(model)
 
     renderer = mujoco.Renderer(model, height=height, width=width)
@@ -71,30 +104,7 @@ def _export_video_impl(
                 renderer.update_scene(render_data)
             frames.append(renderer.render().copy())
 
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-
-        if fmt == "gif":
-            imgs = [PILImage.fromarray(f) for f in frames]
-            imgs[0].save(
-                output_path,
-                format="GIF",
-                save_all=True,
-                append_images=imgs[1:],
-                duration=max(1, 1000 // fps),
-                loop=0,
-                optimize=False,
-            )
-        else:  # mp4
-            try:
-                import imageio as _imageio  # noqa: PLC0415
-            except ImportError as exc:
-                raise RuntimeError(
-                    "MP4 export requires imageio[ffmpeg]. "
-                    "Install with: pip install 'mujoco-mcp[media]'"
-                ) from exc
-            with _imageio.get_writer(output_path, fps=fps, macro_block_size=None) as writer:
-                for f in frames:
-                    writer.append_data(f)
+        _encode_frames(frames, output_path, fps, fmt)
 
         return json.dumps({
             "ok": True,
@@ -136,9 +146,42 @@ async def export_video(
     """
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
-    await asyncio.sleep(0)
-    return _export_video_impl(
-        slot.model, slot.data, slot.trajectory,
-        output_path, fps=fps, fmt=fmt, camera=camera,
-        width=width, height=height,
-    )
+    model = slot.model
+    trajectory = slot.trajectory
+
+    if not trajectory:
+        raise ValueError("trajectory is empty; call sim_record + sim_step first")
+    if fmt not in ("mp4", "gif"):
+        raise ValueError(f"fmt must be 'mp4' or 'gif', got {fmt!r}")
+    if camera is not None:
+        cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera)
+        if cam_id < 0:
+            raise ValueError(f"Camera {camera!r} not found in model")
+
+    render_data = mujoco.MjData(model)
+    renderer = mujoco.Renderer(model, height=height, width=width)
+    frames: list = []
+    try:
+        for i, frame in enumerate(trajectory):
+            if i % 50 == 0:
+                await asyncio.sleep(0)
+            render_data.qpos[:] = frame["qpos"]
+            render_data.qvel[:] = frame["qvel"]
+            render_data.time = frame.get("t", 0.0)
+            mujoco.mj_forward(model, render_data)
+            if camera is not None:
+                renderer.update_scene(render_data, camera=camera)
+            else:
+                renderer.update_scene(render_data)
+            frames.append(renderer.render().copy())
+    finally:
+        renderer.close()
+
+    _encode_frames(frames, output_path, fps, fmt)
+    return json.dumps({
+        "ok": True,
+        "path": output_path,
+        "frames": len(frames),
+        "duration_s": round(len(frames) / fps, 3),
+        "format": fmt,
+    })

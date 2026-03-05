@@ -41,8 +41,9 @@ height: int = 480
 - 遍历每帧：`data.qpos[:] = frame["qpos"]`、`data.qvel[:] = frame["qvel"]`、`mj_forward`、`render()` → `uint8 [H,W,3]`
 - GIF：Pillow `Image.save(save_all=True, append_images=[...], duration=1000//fps, loop=0)`（无额外依赖）
 - MP4：`imageio.get_writer(output_path, fps=fps)` → `.append_data(frame)` → `.close()`（需 `imageio[ffmpeg]`，运行时检测）
-- 每 50 帧 `await asyncio.sleep(0)`
-- `finally`：还原原始 `qpos/qvel/time`，`mj_forward`
+- 每 50 帧 `await asyncio.sleep(0)`（async MCP wrapper 层渲染循环中）
+- 使用独立 `render_data = mujoco.MjData(model)` 渲染，从不修改 slot.data
+- `finally`：`renderer.close()`（slot.data 未被修改，无需还原）
 
 **可选依赖：**
 - GIF：Pillow（已有）
@@ -159,7 +160,7 @@ slot.trajectory.append({
 |------|------|
 | 装饰器顺序 | `@mcp.tool()` 外层，`@safe_tool` 内层 |
 | 事件循环 | `export_video`：每 50 帧 `await asyncio.sleep(0)` |
-| 状态恢复 | `export_video` 用 `finally` 块还原 `qpos/qvel/time` + `mj_forward` |
+| 状态恢复 | `export_video` 使用独立 `render_data`，slot.data 全程未被修改，`finally` 只需 `renderer.close()` |
 | 可选依赖 | MP4 运行时检测 `imageio`，`ImportError` → `RuntimeError` 友好提示 |
 | GIF 依赖 | Pillow（已有），零新依赖 |
 | `_impl` 模式 | `_export_video_impl`、`_export_state_log_impl`、`_plot_trajectory_impl` 供测试直接调用 |
