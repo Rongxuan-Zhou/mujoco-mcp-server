@@ -2,10 +2,10 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![MuJoCo](https://img.shields.io/badge/mujoco-%E2%89%A52.3-green.svg)](https://mujoco.org/)
-[![Tests](https://img.shields.io/badge/tests-111%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-124%20passed-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MuJoCo physics simulation as **59 MCP tools** for [Claude Code](https://claude.ai/code) and other [Model Context Protocol](https://modelcontextprotocol.io) clients — run simulations, render frames, analyze physics, control robots, and sweep parameters directly from your AI assistant.
+MuJoCo physics simulation as **62 MCP tools** for [Claude Code](https://claude.ai/code) and other [Model Context Protocol](https://modelcontextprotocol.io) clients — run simulations, render frames, analyze physics, control robots, and sweep parameters directly from your AI assistant.
 
 ## Requirements
 
@@ -69,6 +69,7 @@ python -m mujoco_mcp --transport streamable-http --host 0.0.0.0 --port 8080
 | **Meta** | `server_diagnostics` | Server health, GL backend, and loaded slots |
 | **Kinematics** | `solve_ik` | Damped Least Squares IK for end-effector sites |
 | **Optimization** | `optimize_ilqr` `optimize_mppi` | iLQR and MPPI trajectory optimization |
+| **Robustness** | `apply_perturbation` `stability_analysis` `randomize_dynamics` | Perturbation robustness analysis and domain randomization |
 | **Diagnostics** | `validate_mjcf` `model_summary` `suggest_contact_params` `diagnose_instability` | Pre-load XML validation, model overview, contact parameter tuning, instability detection |
 | **Workflow** | `run_and_analyze` `debug_contacts` `evaluate_trajectory` `compare_trajectories` | Composite research workflows |
 
