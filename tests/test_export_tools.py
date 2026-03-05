@@ -133,3 +133,160 @@ def test_plot_data_missing_file():
     assert isinstance(result[0], TextContent)
     d = json.loads(result[0].text)
     assert "error" in d
+
+
+# ── export_state_log + plot_trajectory tests ──────────────────────────────────
+
+import json as _json_state  # noqa: E402
+import mujoco as _mujoco  # noqa: E402
+
+SENSOR_XML = """
+<mujoco>
+  <option timestep="0.01"/>
+  <worldbody>
+    <body name="cart">
+      <joint name="slider" type="slide" axis="1 0 0" range="-2 2"/>
+      <geom type="box" size="0.1 0.1 0.1" mass="1"/>
+      <site name="cog"/>
+    </body>
+  </worldbody>
+  <sensor>
+    <accelerometer name="accel" site="cog"/>
+  </sensor>
+  <actuator>
+    <motor name="motor" joint="slider" gear="1" ctrllimited="true" ctrlrange="-10 10"/>
+  </actuator>
+</mujoco>
+"""
+
+CONTACT_XML = """
+<mujoco>
+  <option timestep="0.01"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="5 5 0.1"/>
+    <body name="box" pos="0 0 0.1">
+      <joint name="fall" type="free"/>
+      <geom type="box" size="0.1 0.1 0.1" mass="1"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+
+def _make_sensor_traj(n=20):
+    model = _mujoco.MjModel.from_xml_string(SENSOR_XML)
+    data = _mujoco.MjData(model)
+    _mujoco.mj_forward(model, data)
+    data.ctrl[0] = 5.0
+    traj = []
+    for _ in range(n):
+        _mujoco.mj_step(model, data)
+        traj.append({
+            "t": data.time,
+            "qpos": data.qpos.tolist(),
+            "qvel": data.qvel.tolist(),
+            "ctrl": data.ctrl.tolist(),
+        })
+    return model, data, traj
+
+
+def _make_contact_traj(n=30):
+    model = _mujoco.MjModel.from_xml_string(CONTACT_XML)
+    data = _mujoco.MjData(model)
+    _mujoco.mj_forward(model, data)
+    traj = []
+    for _ in range(n):
+        _mujoco.mj_step(model, data)
+        traj.append({
+            "t": data.time,
+            "qpos": data.qpos.tolist(),
+            "qvel": data.qvel.tolist(),
+            "ctrl": data.ctrl.tolist(),
+        })
+    return model, data, traj
+
+
+def test_export_state_log_qpos_qvel_ctrl(tmp_path):
+    """export_state_log 应输出 qpos/qvel/ctrl 列。"""
+    import csv as _csv
+    from mujoco_mcp.tools.export import _export_state_log_impl
+    model, data, traj = _make_sensor_traj()
+    out = str(tmp_path / "state.csv")
+    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+                                               include=["qpos", "qvel", "ctrl"]))
+    assert result["ok"] is True
+    with open(out) as f:
+        header = next(_csv.reader(f))
+    assert "qpos_0" in header
+    assert "qvel_0" in header
+    assert "ctrl_0" in header
+
+
+def test_export_state_log_body_xpos(tmp_path):
+    """body_xpos:<name> 应产生 <name>_x/y/z 列。"""
+    import csv as _csv
+    from mujoco_mcp.tools.export import _export_state_log_impl
+    model, data, traj = _make_sensor_traj()
+    out = str(tmp_path / "xpos.csv")
+    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+                                               include=["body_xpos:cart"]))
+    assert result["ok"] is True
+    with open(out) as f:
+        header = next(_csv.reader(f))
+    assert "cart_x" in header
+    assert "cart_y" in header
+    assert "cart_z" in header
+
+
+def test_export_state_log_contacts(tmp_path):
+    """contacts tag 应产生 contact_count 和 max_contact_force 列。"""
+    import csv as _csv
+    from mujoco_mcp.tools.export import _export_state_log_impl
+    model, data, traj = _make_contact_traj()
+    out = str(tmp_path / "contacts.csv")
+    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+                                               include=["contacts"]))
+    assert result["ok"] is True
+    with open(out) as f:
+        header = next(_csv.reader(f))
+    assert "contact_count" in header
+    assert "max_contact_force" in header
+
+
+def test_export_state_log_sensors(tmp_path):
+    """sensors tag 应产生加速度计 accel_0/1/2 列（3D 传感器）。"""
+    import csv as _csv
+    from mujoco_mcp.tools.export import _export_state_log_impl
+    model, data, traj = _make_sensor_traj()
+    out = str(tmp_path / "sensors.csv")
+    result = _json_state.loads(_export_state_log_impl(model, data, traj, out,
+                                               include=["sensors"]))
+    assert result["ok"] is True
+    with open(out) as f:
+        header = next(_csv.reader(f))
+    assert any(col.startswith("accel") for col in header)
+
+
+def test_plot_trajectory_phase_returns_image(tmp_path):
+    """plot_trajectory phase 模式应返回 ImageContent。"""
+    from mujoco_mcp.tools.export import _export_state_log_impl, _plot_trajectory_impl
+    from mcp.types import ImageContent
+    model, data, traj = _make_sensor_traj(n=50)
+    csv_path = str(tmp_path / "traj.csv")
+    _export_state_log_impl(model, data, traj, csv_path, include=["qpos", "qvel"])
+    result = _plot_trajectory_impl(csv_path, "phase", dof=0)
+    assert any(isinstance(r, ImageContent) for r in result)
+    img_item = next(r for r in result if isinstance(r, ImageContent))
+    assert len(img_item.data) > 100
+
+
+def test_plot_trajectory_path3d_returns_image(tmp_path):
+    """plot_trajectory path3d 模式应返回 ImageContent。"""
+    from mujoco_mcp.tools.export import _export_state_log_impl, _plot_trajectory_impl
+    from mcp.types import ImageContent
+    model, data, traj = _make_sensor_traj(n=50)
+    csv_path = str(tmp_path / "traj3d.csv")
+    _export_state_log_impl(model, data, traj, csv_path,
+                           include=["body_xpos:cart"])
+    result = _plot_trajectory_impl(csv_path, "path3d", body="cart")
+    assert any(isinstance(r, ImageContent) for r in result)
