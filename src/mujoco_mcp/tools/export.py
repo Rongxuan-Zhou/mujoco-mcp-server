@@ -1,4 +1,4 @@
-"""Export tools (tools 25–26): export_csv, plot_data."""
+"""Export tools: export_csv, plot_data, export_state_log, plot_trajectory."""
 
 import asyncio
 import base64
@@ -232,10 +232,9 @@ def _export_state_log_impl(
             body_xquat_bodies.append((name, bid))
             header += [f"{name}_qw", f"{name}_qx", f"{name}_qy", f"{name}_qz"]
 
-    # Build sensor column mapping after an initial mj_forward
+    # Build sensor column mapping from model metadata (no mj_forward needed here)
     sensor_col_map: list = []
     if "sensors" in include and model.nsensor > 0:
-        mujoco.mj_forward(model, data)
         n_sensordata = len(data.sensordata)
         for i in range(model.nsensor):
             sname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SENSOR, i) or f"sensor_{i}"
@@ -265,7 +264,7 @@ def _export_state_log_impl(
             writer.writeheader()
 
             for frame in trajectory:
-                row: dict = {"t": frame["t"]}
+                row: dict = {"t": frame.get("t", 0.0)}
 
                 if "qpos" in include:
                     for i, v in enumerate(frame["qpos"]):

@@ -84,6 +84,8 @@ def _export_video_impl(
         raise ValueError("trajectory is empty; call sim_record + sim_step first")
     if fmt not in ("mp4", "gif"):
         raise ValueError(f"fmt must be 'mp4' or 'gif', got {fmt!r}")
+    if fps <= 0:
+        raise ValueError(f"fps must be > 0, got {fps!r}")
 
     # Validate camera before starting renderer
     if camera is not None:
@@ -158,6 +160,8 @@ async def export_video(
         raise ValueError("trajectory is empty; call sim_record + sim_step first")
     if fmt not in ("mp4", "gif"):
         raise ValueError(f"fmt must be 'mp4' or 'gif', got {fmt!r}")
+    if fps <= 0:
+        raise ValueError(f"fps must be > 0, got {fps!r}")
     if camera is not None:
         cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera)
         if cam_id < 0:
