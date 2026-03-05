@@ -70,6 +70,7 @@ async def sim_step(
                 "t":    float(d.time),
                 "qpos": d.qpos.copy().tolist(),
                 "qvel": d.qvel.copy().tolist(),
+                "ctrl": d.ctrl.copy().tolist(),
             })
         if (step + 1) % ASYNC_YIELD_INTERVAL == 0:
             await asyncio.sleep(0)  # yield to event loop
