@@ -11,47 +11,6 @@ Load robots, step physics, analyze contacts, optimize trajectories, export video
 
 ---
 
-## What you can do
-
-Once connected, just ask Claude:
-
-**Trajectory optimization & control**
-```
-"Run iLQR on the Franka arm to reach [0.4, 0, 0.5] in 50 steps — show the control sequence and waypoints"
-"Compare MPPI (200 samples) vs iLQR on the hopper reaching task; which converges to lower cost?"
-"Plan a min-jerk Cartesian trajectory for the end-effector, step the PD controller, and plot joint torques over time"
-```
-
-**Robustness & sim-to-real**
-```
-"Sweep body mass ±40% and floor friction [0.1, 2.0] over 50 random samples — report mean/std of max CoM speed"
-"Apply 30 N lateral impulses across 16 Fibonacci sphere directions; what is the stability margin of the current controller?"
-"At what force magnitude does the bipedal walker fail to recover in more than 25% of directions?"
-```
-
-**Contact mechanics & model validation**
-```
-"Validate this MJCF for dangling actuators and solref instabilities before I load it"
-"Are the contact parameters between the gripper fingers and the object causing numerical stiffness? Suggest alternatives"
-"Show the active contact forces and check whether the friction cone constraints are satisfied"
-```
-
-**Kinematics & workspace analysis**
-```
-"Compute the manipulability index at this Franka configuration — is it near a singularity?"
-"Solve IK for site 'ee' at [0.5, 0.2, 0.3] and verify the joint limits are respected"
-"Map reachable workspace by sweeping joint angles and recording Cartesian ee positions"
-```
-
-**RL & data pipelines**
-```
-"Set up a Gymnasium env for the hopper, run 500 steps with random actions, and export a phase portrait of hip angle vs angular velocity"
-"Record a 10-second rollout, export full state log with body positions and sensor data, then plot the 3D CoM trajectory"
-"Run domain randomization on link masses and timestep — export CSV and show which parameter range produces the worst instability"
-```
-
----
-
 ## Requirements
 
 - Python ≥ 3.10, MuJoCo ≥ 2.3
@@ -93,6 +52,47 @@ Or manually in `~/.claude.json`:
 
 ```bash
 python -m mujoco_mcp --transport streamable-http --host 0.0.0.0 --port 8080
+```
+
+---
+
+## What you can do
+
+Once connected, just ask Claude:
+
+**Trajectory optimization & control**
+```
+"Run iLQR on the Franka arm to reach [0.4, 0, 0.5] in 50 steps — show the control sequence and waypoints"
+"Compare MPPI (200 samples) vs iLQR on the hopper reaching task; which converges to lower cost?"
+"Plan a min-jerk Cartesian trajectory for the end-effector, step the PD controller, and plot joint torques over time"
+```
+
+**Robustness & sim-to-real**
+```
+"Sweep body mass ±40% and floor friction [0.1, 2.0] over 50 random samples — report mean/std of max CoM speed"
+"Apply 30 N lateral impulses across 16 Fibonacci sphere directions; what is the stability margin of the current controller?"
+"At what force magnitude does the bipedal walker fail to recover in more than 25% of directions?"
+```
+
+**Contact mechanics & model validation**
+```
+"Validate this MJCF for dangling actuators and solref instabilities before I load it"
+"Are the contact parameters between the gripper fingers and the object causing numerical stiffness? Suggest alternatives"
+"Show the active contact forces and check whether the friction cone constraints are satisfied"
+```
+
+**Kinematics & workspace analysis**
+```
+"Compute the manipulability index at this Franka configuration — is it near a singularity?"
+"Solve IK for site 'ee' at [0.5, 0.2, 0.3] and verify the joint limits are respected"
+"Map reachable workspace by sweeping joint angles and recording Cartesian ee positions"
+```
+
+**RL & data pipelines**
+```
+"Set up a Gymnasium env for the hopper, run 500 steps with random actions, and export a phase portrait of hip angle vs angular velocity"
+"Record a 10-second rollout, export full state log with body positions and sensor data, then plot the 3D CoM trajectory"
+"Run domain randomization on link masses and timestep — export CSV and show which parameter range produces the worst instability"
 ```
 
 ---
