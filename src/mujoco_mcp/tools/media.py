@@ -85,17 +85,13 @@ def _export_video_impl(
                 optimize=False,
             )
         else:  # mp4
-            import sys as _sys  # noqa: PLC0415
-            # Intentional lazy lookup: only use imageio if it is already present
-            # in sys.modules (i.e. the [media] extra has been installed AND
-            # imported).  This lets tests simulate "not installed" by removing
-            # the entry from sys.modules without actually uninstalling the pkg.
-            _imageio = _sys.modules.get("imageio")
-            if _imageio is None:
+            try:
+                import imageio as _imageio  # noqa: PLC0415
+            except ImportError as exc:
                 raise RuntimeError(
                     "MP4 export requires imageio[ffmpeg]. "
                     "Install with: pip install 'mujoco-mcp[media]'"
-                )
+                ) from exc
             with _imageio.get_writer(output_path, fps=fps, macro_block_size=None) as writer:
                 for f in frames:
                     writer.append_data(f)
@@ -109,10 +105,6 @@ def _export_video_impl(
         })
     finally:
         renderer.close()
-        # Reset data to initial state so the caller sees a clean simulation
-        # after export (deterministic, no partial trajectory state left over).
-        mujoco.mj_resetData(model, data)
-        mujoco.mj_forward(model, data)
 
 
 @mcp.tool()

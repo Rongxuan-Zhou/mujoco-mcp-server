@@ -76,12 +76,13 @@ def test_export_video_empty_trajectory_raises():
 
 
 def test_export_video_state_restored_after(tmp_path):
-    """导出后 qpos/qvel 应恢复原值。"""
+    """导出后 qpos/qvel 应与调用前一致（data 不应被 export 修改）。"""
     from mujoco_mcp.tools.media import _export_video_impl
     model, data = _make_fall()
+    traj = _make_traj(model, data, n=5)
+    # 在调用 _export_video_impl 之前快照（这是函数应当"保留"的状态）
     qpos_before = data.qpos.copy()
     qvel_before = data.qvel.copy()
-    traj = _make_traj(model, data, n=5)
     out = str(tmp_path / "state.gif")
     _export_video_impl(model, data, traj, out, fps=10, fmt="gif")
     assert np.allclose(data.qpos, qpos_before)
@@ -90,22 +91,14 @@ def test_export_video_state_restored_after(tmp_path):
 
 def test_export_video_mp4_requires_imageio(tmp_path):
     """无 imageio 时应抛出 RuntimeError 含 'imageio'。"""
-    import sys
+    from unittest.mock import patch
+    from mujoco_mcp.tools.media import _export_video_impl
     model, data = _make_fall()
     traj = _make_traj(model, data, n=3)
-    # 先导入模块（若已缓存无影响），然后临时从 sys.modules 移除 imageio
-    sys.modules.pop("imageio", None)
-    try:
-        from mujoco_mcp.tools.media import _export_video_impl
+    # patch.dict 将 "imageio" 设为 None，使 import imageio 抛出 ImportError
+    with patch.dict("sys.modules", {"imageio": None}):
         with pytest.raises(RuntimeError, match="imageio"):
             _export_video_impl(model, data, traj, str(tmp_path / "out.mp4"), fmt="mp4")
-    finally:
-        # 恢复：若系统有 imageio 则重新导入
-        try:
-            import imageio as _imageio_restore
-            sys.modules["imageio"] = _imageio_restore
-        except ImportError:
-            pass
 
 
 def test_export_video_invalid_format_raises(tmp_path):
