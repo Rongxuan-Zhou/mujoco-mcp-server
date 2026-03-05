@@ -216,8 +216,8 @@ def _apply_perturbation_impl(
 async def apply_perturbation(
     ctx: Context,
     body_name: str,
-    force: list[float] = [0.0, 0.0, 0.0],
-    torque: list[float] = [0.0, 0.0, 0.0],
+    force: list[float] | None = None,
+    torque: list[float] | None = None,
     n_steps: int = 50,
     recovery_steps: int = 100,
     with_controller: bool = False,
@@ -246,6 +246,10 @@ async def apply_perturbation(
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
     await asyncio.sleep(0)
+    if force is None:
+        force = [0.0, 0.0, 0.0]
+    if torque is None:
+        torque = [0.0, 0.0, 0.0]
     return _apply_perturbation_impl(
         slot.model, slot.data, slot.controller,
         body_name=body_name, force=force, torque=torque,
@@ -318,7 +322,7 @@ def _stability_analysis_impl(
 async def stability_analysis(
     ctx: Context,
     body_name: str,
-    force_magnitudes: list[float] = [1.0, 5.0, 10.0, 20.0],
+    force_magnitudes: list[float] | None = None,
     n_directions: int = 8,
     n_steps: int = 50,
     recovery_steps: int = 200,
@@ -347,6 +351,8 @@ async def stability_analysis(
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
     await asyncio.sleep(0)
+    if force_magnitudes is None:
+        force_magnitudes = [1.0, 5.0, 10.0, 20.0]
     return _stability_analysis_impl(
         slot.model, slot.data, slot.controller,
         body_name=body_name, force_magnitudes=force_magnitudes,
@@ -404,7 +410,7 @@ def _randomize_dynamics_impl(
             mujoco.mj_forward(model, d_tmp)
 
             max_speed = 0.0
-            for _ in range(eval_steps):
+            for _step in range(eval_steps):
                 mujoco.mj_step(model, d_tmp)
                 speed = float(np.linalg.norm(d_tmp.qvel))
                 if speed > max_speed:
