@@ -33,8 +33,6 @@ async def export_csv(
     Requires sim_record to have been started before sim_step calls.
     Returns: path written, row count, column names.
     """
-    import csv
-
     mgr = ctx.request_context.lifespan_context.sim_manager
     slot = mgr.get(sim_name)
 
@@ -359,35 +357,13 @@ def _plot_trajectory_impl(
         output_path: if given, save PNG; else return inline.
         title: plot title.
     """
+    if plot_type not in ("phase", "path3d"):
+        raise ValueError(f"plot_type must be 'phase' or 'path3d', got {plot_type!r}")
+
     import pandas as pd
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
-    # Ensure the '3d' projection is registered with matplotlib.
-    # On systems where the system mpl_toolkits (from /usr/lib/python3) is
-    # incompatible with the venv matplotlib, matplotlib.projections silently
-    # skips registration.  We fix this by:
-    # 1. Prepending the venv's mpl_toolkits directory to the namespace package
-    #    search path so that `from mpl_toolkits import mplot3d` loads the
-    #    correct version.
-    # 2. Explicitly calling register_projection(Axes3D) afterwards.
-    from matplotlib.projections import get_projection_names, register_projection
-    if "3d" not in get_projection_names():
-        import site as _site
-        import mpl_toolkits as _mpl_toolkits
-        _venv_mpl = os.path.join(_site.getusersitepackages(), "mpl_toolkits")
-        if _venv_mpl not in _mpl_toolkits.__path__:
-            _mpl_toolkits.__path__.insert(0, _venv_mpl)
-        try:
-            from mpl_toolkits import mplot3d as _mplot3d  # noqa: F401
-            from mpl_toolkits.mplot3d import Axes3D as _Axes3D
-            register_projection(_Axes3D)
-        except Exception:
-            pass  # 3D projection unavailable; path3d will fail with a clear error
-
-    if plot_type not in ("phase", "path3d"):
-        raise ValueError(f"plot_type must be 'phase' or 'path3d', got {plot_type!r}")
 
     df = pd.read_csv(csv_path)
 
@@ -418,6 +394,19 @@ def _plot_trajectory_impl(
         summary = f"Phase portrait DOF={dof}, {len(df)} frames"
 
     else:  # path3d
+        # On systems where a system mpl_toolkits shadows the venv version,
+        # locate the correct mpl_toolkits next to the active matplotlib package
+        # and prepend it to the namespace-package search path before importing.
+        import mpl_toolkits as _mpl_toolkits
+        from matplotlib.projections import get_projection_names, register_projection
+        _mpl_sibling = os.path.normpath(
+            os.path.join(os.path.dirname(matplotlib.__file__), "..", "mpl_toolkits")
+        )
+        if os.path.isdir(_mpl_sibling) and _mpl_sibling not in _mpl_toolkits.__path__:
+            _mpl_toolkits.__path__.insert(0, _mpl_sibling)
+        if "3d" not in get_projection_names():
+            from mpl_toolkits.mplot3d import Axes3D as _Axes3D
+            register_projection(_Axes3D)
         if body is None:
             raise ValueError("body must be specified for plot_type='path3d'")
         x_col, y_col, z_col = f"{body}_x", f"{body}_y", f"{body}_z"
