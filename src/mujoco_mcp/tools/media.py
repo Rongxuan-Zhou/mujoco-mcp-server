@@ -8,6 +8,11 @@ import os
 import mujoco
 from PIL import Image as PILImage
 
+# Async yield interval for the render loop (frames). Rendering is more
+# CPU-intensive per iteration than sim steps, so a shorter interval is used
+# compared to ASYNC_YIELD_INTERVAL (1_000) in constants.py.
+_RENDER_YIELD_INTERVAL = 50
+
 from mcp.server.fastmcp import Context
 
 from .._registry import mcp
@@ -158,12 +163,15 @@ async def export_video(
         if cam_id < 0:
             raise ValueError(f"Camera {camera!r} not found in model")
 
+    # Rendering loop is inline here (not delegated to _export_video_impl) so
+    # that we can yield the event loop every _RENDER_YIELD_INTERVAL frames.
+    # _export_video_impl remains the sync, test-friendly entry point.
     render_data = mujoco.MjData(model)
     renderer = mujoco.Renderer(model, height=height, width=width)
     frames: list = []
     try:
         for i, frame in enumerate(trajectory):
-            if i % 50 == 0:
+            if i % _RENDER_YIELD_INTERVAL == 0:
                 await asyncio.sleep(0)
             render_data.qpos[:] = frame["qpos"]
             render_data.qvel[:] = frame["qvel"]
