@@ -1,7 +1,6 @@
 """Tests for robustness tools (apply_perturbation, stability_analysis, randomize_dynamics)."""
 import csv
 import json
-import tempfile
 
 import numpy as np
 import pytest
@@ -99,12 +98,13 @@ def test_apply_perturbation_slot_state_unchanged():
     model, data = _make_pendulum()
     qpos_before = data.qpos.copy()
     qvel_before = data.qvel.copy()
-    _apply_perturbation_impl(
+    result = json.loads(_apply_perturbation_impl(
         model, data, controller=None,
         body_name="pendulum", force=[5.0, 0.0, 0.0], torque=[0.0, 0.0, 0.0],
         n_steps=30, recovery_steps=50,
         with_controller=False, recovery_threshold=0.1,
-    )
+    ))
+    assert result["max_qvel_deviation"] > 0.0, "Perturbation had no effect"
     assert np.allclose(data.qpos, qpos_before), "qpos was modified"
     assert np.allclose(data.qvel, qvel_before), "qvel was modified"
 
@@ -219,22 +219,22 @@ def test_randomize_dynamics_distance_without_goal_raises():
 
 def test_randomize_dynamics_seeded_reproducible():
     """Same random_seed must produce identical mean across two calls."""
-    model, data = _make_slider()
     kwargs = dict(
         param_distributions={"geom.box.mass": {"type": "uniform", "low": 0.5, "high": 2.0}},
         n_samples=8, eval_steps=15,
         metric="max_speed", goal_qpos=None, export_csv=None, random_seed=123,
     )
-    result1 = json.loads(_randomize_dynamics_impl(model, data, **kwargs))
-    result2 = json.loads(_randomize_dynamics_impl(model, data, **kwargs))
+    model1, data1 = _make_slider()
+    result1 = json.loads(_randomize_dynamics_impl(model1, data1, **kwargs))
+    model2, data2 = _make_slider()
+    result2 = json.loads(_randomize_dynamics_impl(model2, data2, **kwargs))
     assert result1["mean"] == result2["mean"]
 
 
-def test_randomize_dynamics_csv_export():
+def test_randomize_dynamics_csv_export(tmp_path):
     """export_csv must create a readable CSV with correct columns."""
     model, data = _make_slider()
-    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
-        csv_path = f.name
+    csv_path = str(tmp_path / "out.csv")
     result = json.loads(_randomize_dynamics_impl(
         model, data,
         param_distributions={"geom.box.mass": {"type": "uniform", "low": 0.5, "high": 2.0}},
